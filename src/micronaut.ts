@@ -71,6 +71,14 @@ export interface MicronautCreateBranchResult {
   baseBranch: string;
 }
 
+function normalizeGitHubOwner(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function normalizeGitHubRepo(value: string): string {
+  return value.trim().replace(/\.git$/i, "").toLowerCase();
+}
+
 export function resolveProjectRepositoryUrl(project: Project): string | null {
   return (
     project.codebase.repoUrl ??
@@ -97,8 +105,8 @@ export function parseGitHubRepository(
     /^git@github\.com:(?<owner>[^/]+)\/(?<repo>[^/]+?)(?:\.git)?$/i.exec(trimmed) ??
     /^ssh:\/\/git@github\.com\/(?<owner>[^/]+)\/(?<repo>[^/]+?)(?:\.git)?$/i.exec(trimmed);
   if (sshMatch?.groups) {
-    const owner = sshMatch.groups.owner;
-    const repo = sshMatch.groups.repo;
+    const owner = normalizeGitHubOwner(sshMatch.groups.owner);
+    const repo = normalizeGitHubRepo(sshMatch.groups.repo);
     return {
       owner,
       repo,
@@ -121,10 +129,13 @@ export function parseGitHubRepository(
       return null;
     }
 
+    const normalizedOwner = normalizeGitHubOwner(owner);
+    const normalizedRepo = normalizeGitHubRepo(repo);
+
     return {
-      owner,
-      repo: repo.replace(/\.git$/i, ""),
-      canonicalUrl: buildGitHubRepositoryUrl(owner, repo.replace(/\.git$/i, ""))
+      owner: normalizedOwner,
+      repo: normalizedRepo,
+      canonicalUrl: buildGitHubRepositoryUrl(normalizedOwner, normalizedRepo)
     };
   } catch {
     return null;

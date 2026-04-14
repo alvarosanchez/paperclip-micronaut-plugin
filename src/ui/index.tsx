@@ -10,7 +10,20 @@ import {
   type MicronautProjectOverview
 } from "../micronaut.js";
 
-const MICRONAUT_SYMBOL_URL = "https://objectcomputing.com/download_file/5213";
+const MICRONAUT_TAB_LABEL = "Micronaut";
+const MICRONAUT_SYMBOL_SVG = [
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">',
+  '<defs><linearGradient id="micronaut-gradient" x1="12" y1="10" x2="52" y2="54" gradientUnits="userSpaceOnUse">',
+  '<stop offset="0%" stop-color="#62d8ff"/>',
+  '<stop offset="100%" stop-color="#0f74ff"/>',
+  "</linearGradient></defs>",
+  '<path fill="url(#micronaut-gradient)" d="M32 4 54 17v30L32 60 10 47V17Z"/>',
+  '<path fill="#fff" d="M18 44V20h7l7 10 7-10h7v24h-7V31l-7 10-7-10v13Z"/>',
+  "</svg>"
+].join("");
+const MICRONAUT_SYMBOL_URL = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(
+  MICRONAUT_SYMBOL_SVG
+)}`;
 
 const RELATIVE_TIME_FORMATTER = new Intl.RelativeTimeFormat("en", {
   numeric: "always"
@@ -574,6 +587,14 @@ interface StatusPill {
   tone: StatusPillTone;
 }
 
+interface MicronautTabIconObserverState {
+  bootstrapScheduled?: boolean;
+  documentObserver?: MutationObserver;
+  historyPatched?: boolean;
+  observedTablist?: HTMLElement | null;
+  tablistObserver?: MutationObserver;
+}
+
 function normalizeTextContent(value: string | null | undefined): string {
   return value?.replace(/\s+/g, " ").trim() ?? "";
 }
@@ -754,7 +775,7 @@ function isMicronautHostTab(candidate: Element): candidate is HTMLElement {
   return (
     candidate instanceof HTMLElement &&
     candidate.getAttribute("role") === "tab" &&
-    normalizeTextContent(candidate.textContent) === "Micronaut"
+    normalizeTextContent(candidate.textContent) === MICRONAUT_TAB_LABEL
   );
 }
 
@@ -775,85 +796,146 @@ function applyMicronautTabIconToTab(tab: HTMLElement): void {
   tab.prepend(icon);
 }
 
-function applyMicronautTabIconsToDocument(): void {
-  if (typeof document === "undefined") {
-    return;
-  }
-
-  for (const candidate of Array.from(document.querySelectorAll('[role="tab"]'))) {
-    if (isMicronautHostTab(candidate)) {
-      applyMicronautTabIconToTab(candidate);
-    }
-  }
-}
-
-function queueMicronautTabIconRefresh(): void {
+function getMicronautTabIconObserverState(): MicronautTabIconObserverState | null {
   if (typeof window === "undefined") {
-    return;
+    return null;
   }
 
-  const windowWithMicronautState = window as Window & {
-    __paperclipMicronautTabIconRefreshScheduled?: boolean;
+  const windowWithState = window as Window & {
+    __paperclipMicronautTabIconObserverState?: MicronautTabIconObserverState;
   };
 
-  if (windowWithMicronautState.__paperclipMicronautTabIconRefreshScheduled) {
-    return;
+  if (!windowWithState.__paperclipMicronautTabIconObserverState) {
+    windowWithState.__paperclipMicronautTabIconObserverState = {};
   }
 
-  windowWithMicronautState.__paperclipMicronautTabIconRefreshScheduled = true;
-  window.requestAnimationFrame(() => {
-    windowWithMicronautState.__paperclipMicronautTabIconRefreshScheduled = false;
-    applyMicronautTabIconsToDocument();
-  });
+  return windowWithState.__paperclipMicronautTabIconObserverState;
 }
 
-function startMicronautTabIconObserver(): void {
+function findMicronautTabs(root: ParentNode): HTMLElement[] {
+  const tabs: HTMLElement[] = [];
+
+  if (root instanceof Element && isMicronautHostTab(root)) {
+    tabs.push(root);
+  }
+
+  for (const candidate of Array.from(root.querySelectorAll('[role="tab"]'))) {
+    if (isMicronautHostTab(candidate)) {
+      tabs.push(candidate);
+    }
+  }
+
+  return tabs;
+}
+
+function applyMicronautTabIconsInRoot(root: ParentNode): HTMLElement[] {
+  const tabs = findMicronautTabs(root);
+  for (const tab of tabs) {
+    applyMicronautTabIconToTab(tab);
+  }
+
+  return tabs;
+}
+
+function getMicronautTablist(tab: HTMLElement): HTMLElement | null {
+  const closestTablist = tab.closest('[role="tablist"]');
+  if (closestTablist instanceof HTMLElement) {
+    return closestTablist;
+  }
+
+  return tab.parentElement;
+}
+
+function disconnectMicronautTabDocumentObserver(state: MicronautTabIconObserverState): void {
+  state.documentObserver?.disconnect();
+  state.documentObserver = undefined;
+}
+
+function disconnectMicronautTablistObserver(state: MicronautTabIconObserverState): void {
+  state.tablistObserver?.disconnect();
+  state.tablistObserver = undefined;
+  state.observedTablist = null;
+}
+
+function startMicronautTabDocumentObserver(): void {
   if (typeof window === "undefined" || typeof document === "undefined") {
     return;
   }
 
-  const windowWithMicronautState = window as Window & {
-    __paperclipMicronautTabIconObserver?: MutationObserver;
-    __paperclipMicronautTabIconBootstrapScheduled?: boolean;
-  };
-
-  if (windowWithMicronautState.__paperclipMicronautTabIconObserver) {
-    queueMicronautTabIconRefresh();
+  const state = getMicronautTabIconObserverState();
+  if (!state) {
     return;
   }
 
-  const startObserver = () => {
-    if (windowWithMicronautState.__paperclipMicronautTabIconObserver) {
-      queueMicronautTabIconRefresh();
-      return;
-    }
-
+  const attachObserver = () => {
     if (!document.body) {
-      window.requestAnimationFrame(() => {
-        startObserver();
-      });
+      window.requestAnimationFrame(attachObserver);
       return;
     }
 
-    const observer = new MutationObserver(() => {
-      queueMicronautTabIconRefresh();
+    if (state.documentObserver) {
+      const existingTabs = applyMicronautTabIconsInRoot(document);
+      if (existingTabs.length > 0) {
+        startMicronautTablistObserver(existingTabs[0]);
+      }
+      return;
+    }
+
+    const existingTabs = applyMicronautTabIconsInRoot(document);
+    if (existingTabs.length > 0) {
+      startMicronautTablistObserver(existingTabs[0]);
+      return;
+    }
+
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        const scanRoots = new Set<ParentNode>();
+
+        if (record.target instanceof HTMLElement) {
+          const tablist = record.target.closest('[role="tablist"]');
+          if (tablist) {
+            scanRoots.add(tablist);
+          }
+        }
+
+        for (const node of Array.from(record.addedNodes)) {
+          if (!(node instanceof HTMLElement)) {
+            continue;
+          }
+
+          const tablist = node.closest('[role="tablist"]');
+          if (tablist) {
+            scanRoots.add(tablist);
+          } else {
+            scanRoots.add(node);
+          }
+        }
+
+        for (const scanRoot of scanRoots) {
+          const tabs = applyMicronautTabIconsInRoot(scanRoot);
+          if (tabs.length > 0) {
+            startMicronautTablistObserver(tabs[0]);
+            return;
+          }
+        }
+      }
     });
+
     observer.observe(document.body, {
       childList: true,
       subtree: true
     });
-    windowWithMicronautState.__paperclipMicronautTabIconObserver = observer;
-    queueMicronautTabIconRefresh();
+    state.documentObserver = observer;
   };
 
   if (document.readyState === "loading") {
-    if (!windowWithMicronautState.__paperclipMicronautTabIconBootstrapScheduled) {
-      windowWithMicronautState.__paperclipMicronautTabIconBootstrapScheduled = true;
+    if (!state.bootstrapScheduled) {
+      state.bootstrapScheduled = true;
       document.addEventListener(
         "DOMContentLoaded",
         () => {
-          windowWithMicronautState.__paperclipMicronautTabIconBootstrapScheduled = false;
-          startObserver();
+          state.bootstrapScheduled = false;
+          attachObserver();
         },
         { once: true }
       );
@@ -861,7 +943,106 @@ function startMicronautTabIconObserver(): void {
     return;
   }
 
-  startObserver();
+  attachObserver();
+}
+
+function startMicronautTablistObserver(tab: HTMLElement): void {
+  const state = getMicronautTabIconObserverState();
+  if (!state) {
+    return;
+  }
+
+  const tablist = getMicronautTablist(tab);
+  if (!tablist) {
+    return;
+  }
+
+  applyMicronautTabIconsInRoot(tablist);
+  disconnectMicronautTabDocumentObserver(state);
+
+  if (state.observedTablist === tablist && state.tablistObserver) {
+    return;
+  }
+
+  disconnectMicronautTablistObserver(state);
+
+  const observer = new MutationObserver((records) => {
+    if (!records.some((record) => record.addedNodes.length > 0 || record.removedNodes.length > 0)) {
+      return;
+    }
+
+    const tabs = applyMicronautTabIconsInRoot(tablist);
+    if (tabs.length === 0) {
+      disconnectMicronautTablistObserver(state);
+      startMicronautTabDocumentObserver();
+      return;
+    }
+
+    if (tabs[0] !== tab) {
+      startMicronautTablistObserver(tabs[0]);
+      return;
+    }
+  });
+
+  observer.observe(tablist, {
+    childList: true,
+    subtree: true
+  });
+  state.tablistObserver = observer;
+  state.observedTablist = tablist;
+}
+
+function restartMicronautTabIconObservers(): void {
+  const state = getMicronautTabIconObserverState();
+  if (!state) {
+    return;
+  }
+
+  disconnectMicronautTablistObserver(state);
+  disconnectMicronautTabDocumentObserver(state);
+  startMicronautTabDocumentObserver();
+}
+
+function installMicronautTabIconHistoryHooks(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const state = getMicronautTabIconObserverState();
+  if (!state || state.historyPatched) {
+    return;
+  }
+
+  state.historyPatched = true;
+  const notify = () => {
+    restartMicronautTabIconObservers();
+  };
+
+  window.addEventListener("popstate", notify);
+  window.addEventListener("pageshow", notify);
+
+  const originalPushState = window.history.pushState.bind(window.history);
+  window.history.pushState = ((data, unused, url) => {
+    const result = originalPushState(data, unused, url);
+    notify();
+    return result;
+  }) as History["pushState"];
+
+  const originalReplaceState = window.history.replaceState.bind(window.history);
+  window.history.replaceState = ((data, unused, url) => {
+    const result = originalReplaceState(data, unused, url);
+    notify();
+    return result;
+  }) as History["replaceState"];
+}
+
+function startMicronautTabIconObserver(): void {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return;
+  }
+
+  installMicronautTabIconHistoryHooks();
+  startMicronautTabDocumentObserver();
 }
 
 function getBranchStatusPills(branch: MicronautProjectBranch): StatusPill[] {

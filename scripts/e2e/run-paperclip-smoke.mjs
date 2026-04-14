@@ -163,13 +163,12 @@ async function fetchJson(url, init = {}) {
   });
 
   const text = await response.text();
-  const body = text ? JSON.parse(text) : null;
 
   if (!response.ok) {
     throw new Error(`Request failed: ${response.status} ${response.statusText} ${text}`);
   }
 
-  return body;
+  return parseJsonResponseBody(response, text);
 }
 
 async function fetchJsonAllowNotFound(url, init = {}) {
@@ -186,17 +185,37 @@ async function fetchJsonAllowNotFound(url, init = {}) {
     return null;
   }
 
-  const body = text ? JSON.parse(text) : null;
   if (!response.ok) {
     throw new Error(`Request failed: ${response.status} ${response.statusText} ${text}`);
   }
 
-  return body;
+  return parseJsonResponseBody(response, text);
 }
 
-function isGitHubApiRateLimitError(error) {
+function parseJsonResponseBody(response, text) {
+  if (!text) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    const preview = text.replace(/\s+/g, " ").trim().slice(0, 200);
+    throw new Error(
+      `Request failed: expected JSON but received ${response.status} ${response.statusText} ${preview}`
+    );
+  }
+}
+
+function isGitHubApiFallbackError(error) {
   const message = error instanceof Error ? error.message : String(error);
-  return /rate limit exceeded/i.test(message) || /secondary rate limit/i.test(message);
+  return (
+    /rate limit exceeded/i.test(message) ||
+    /secondary rate limit/i.test(message) ||
+    /expected JSON/i.test(message) ||
+    /<!doctype/i.test(message) ||
+    /<html/i.test(message)
+  );
 }
 
 async function fetchGitHubApiJson(endpoint) {
@@ -205,11 +224,11 @@ async function fetchGitHubApiJson(endpoint) {
       headers: githubApiHeaders
     });
   } catch (error) {
-    if (!isGitHubApiRateLimitError(error)) {
+    if (!isGitHubApiFallbackError(error)) {
       throw error;
     }
 
-    log(`GitHub REST rate limit hit for ${endpoint}; retrying expectation fetch through gh CLI.`);
+    log(`GitHub REST request for ${endpoint} failed; retrying expectation fetch through gh CLI.`);
     const result = await execFileAsync("gh", ["api", endpoint], {
       cwd: pluginRoot,
       encoding: "utf8",
@@ -227,13 +246,11 @@ async function fetchGitHubApiJsonAllowNotFound(endpoint) {
       headers: githubApiHeaders
     });
   } catch (error) {
-    if (!isGitHubApiRateLimitError(error)) {
+    if (!isGitHubApiFallbackError(error)) {
       throw error;
     }
 
-    log(
-      `GitHub REST rate limit hit for ${endpoint}; retrying not-found-tolerant expectation fetch through gh CLI.`
-    );
+    log(`GitHub REST request for ${endpoint} failed; retrying not-found-tolerant expectation fetch through gh CLI.`);
 
     try {
       const result = await execFileAsync("gh", ["api", endpoint], {

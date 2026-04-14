@@ -99,6 +99,18 @@ class HttpRequestError extends Error {
   }
 }
 
+class GitHubCliFallbackError extends Error {
+  constructor(primaryError: HttpRequestError, fallbackError: unknown) {
+    const fallbackMessage =
+      fallbackError instanceof Error && fallbackError.message.trim()
+        ? fallbackError.message.trim()
+        : "The GitHub CLI fallback failed.";
+
+    super(`${primaryError.message} GitHub CLI fallback also failed: ${fallbackMessage}`);
+    this.name = "GitHubCliFallbackError";
+  }
+}
+
 function buildProjectOverviewCacheScope(projectId: string) {
   return {
     scopeKind: "project" as const,
@@ -257,7 +269,7 @@ function extractGitHubApiEndpoint(url: string): string | null {
   }
 }
 
-function isGitHubApiRateLimitError(error: unknown): boolean {
+function isGitHubApiRateLimitError(error: unknown): error is HttpRequestError {
   return (
     error instanceof HttpRequestError &&
     error.status === 403 &&
@@ -445,7 +457,7 @@ async function fetchJson<T>(ctx: PluginContext, url: string, init: RequestInit =
         throw ghError;
       }
 
-      throw error;
+      throw new GitHubCliFallbackError(error, ghError);
     }
   }
 }
@@ -476,6 +488,10 @@ function describePartialFailure(
 ): string {
   if (error instanceof HttpRequestError && error.status === 404) {
     return notFoundMessage;
+  }
+
+  if (error instanceof GitHubCliFallbackError) {
+    return error.message;
   }
 
   return missingMessage;

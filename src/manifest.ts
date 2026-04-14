@@ -1,4 +1,5 @@
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
+import { MICRONAUT_PROJECT_DETAIL_TAB_ID } from "./micronaut.js";
 
 const manifest: PaperclipPluginManifestV1 = {
   id: "paperclip-micronaut-plugin",
@@ -19,7 +20,7 @@ const manifest: PaperclipPluginManifestV1 = {
     slots: [
       {
         type: "detailTab",
-        id: "micronaut-project-overview",
+        id: MICRONAUT_PROJECT_DETAIL_TAB_ID,
         displayName: "Micronaut",
         exportName: "MicronautProjectDetailTab",
         entityTypes: ["project"]

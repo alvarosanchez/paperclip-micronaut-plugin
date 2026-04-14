@@ -15,6 +15,8 @@ import {
 } from "../src/micronaut.js";
 import plugin from "../src/worker.js";
 
+const itWithFakeGh = process.platform === "win32" ? it.skip : it;
+
 function createProject(repoUrl: string): Project {
   return {
     id: "project-1",
@@ -85,6 +87,10 @@ async function withPathOverride(pathValue: string, run: () => Promise<void>): Pr
 }
 
 async function withFakeGh(scriptBody: string, run: (logPath: string) => Promise<void>): Promise<void> {
+  if (process.platform === "win32") {
+    throw new Error("withFakeGh is not supported on win32.");
+  }
+
   const tempDir = await mkdtemp(join(tmpdir(), "paperclip-micronaut-plugin-gh-"));
   const ghPath = join(tempDir, "gh");
   const logPath = join(tempDir, "gh.log");
@@ -339,7 +345,7 @@ describe("micronaut project detail tab", () => {
     });
   });
 
-  it("falls back to gh for GitHub metadata when GitHub API rate limits", async () => {
+  itWithFakeGh("falls back to gh for GitHub metadata when GitHub API rate limits", async () => {
     global.fetch = vi.fn(async (input) => {
       const url = String(input);
 
@@ -489,6 +495,74 @@ exit 1
         expect(commandLog).toContain("api repos/micronaut-projects/micronaut-test-resources/compare/4.0.x...4.1.x");
       }
     );
+  });
+
+  it("surfaces gh remediation when rate-limited GitHub metadata cannot fall back to gh", async () => {
+    global.fetch = vi.fn(async (input) => {
+      const url = String(input);
+
+      if (url.startsWith("https://api.github.com/repos/micronaut-projects/micronaut-test-resources")) {
+        return jsonResponse(
+          {
+            message: "API rate limit exceeded"
+          },
+          403
+        );
+      }
+
+      return new Response("Not found", { status: 404 });
+    }) as typeof fetch;
+
+    const tempDir = await mkdtemp(join(tmpdir(), "paperclip-micronaut-plugin-rate-limit-no-gh-"));
+    const previousGhBin = process.env.PAPERCLIP_MICRONAUT_GH_BIN;
+
+    try {
+      process.env.PAPERCLIP_MICRONAUT_GH_BIN = join(
+        tempDir,
+        process.platform === "win32" ? "gh.exe" : "gh"
+      );
+
+      await withPathOverride(tempDir, async () => {
+        const harness = createTestHarness({
+          manifest,
+          capabilities: [...manifest.capabilities]
+        });
+        harness.seed({
+          projects: [createProject("https://github.com/micronaut-projects/micronaut-test-resources")]
+        });
+
+        await plugin.definition.setup(harness.ctx);
+
+        const data = await harness.getData<MicronautProjectOverview>(
+          MICRONAUT_PROJECT_OVERVIEW_DATA_KEY,
+          {
+            companyId: "company-1",
+            projectId: "project-1"
+          }
+        );
+
+        expect(data.kind).toBe("ready");
+        if (data.kind !== "ready") {
+          return;
+        }
+
+        expect(data.warnings).toEqual(
+          expect.arrayContaining([
+            expect.stringContaining(
+              "GitHub CLI (`gh`) is not installed on the Paperclip host. Install it to create branches from this tab."
+            )
+          ])
+        );
+      });
+    } finally {
+      if (previousGhBin === undefined) {
+        delete process.env.PAPERCLIP_MICRONAUT_GH_BIN;
+      } else {
+        process.env.PAPERCLIP_MICRONAUT_GH_BIN = previousGhBin;
+      }
+
+      await rm(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("returns cached Micronaut data until an explicit refresh is requested", async () => {
@@ -702,7 +776,35 @@ exit 1
     });
   });
 
-  it("creates a missing Micronaut branch from the default branch", async () => {
+  it("treats Micronaut GitHub organization matching case-insensitively", async () => {
+    const harness = createTestHarness({
+      manifest,
+      capabilities: [...manifest.capabilities]
+    });
+    harness.seed({
+      projects: [createProject("https://github.com/Micronaut-Projects/MICRONAUT-test-resources")]
+    });
+
+    await plugin.definition.setup(harness.ctx);
+
+    const data = await harness.getData<MicronautProjectOverview>(
+      MICRONAUT_PROJECT_OVERVIEW_DATA_KEY,
+      {
+        companyId: "company-1",
+        projectId: "project-1"
+      }
+    );
+
+    expect(data).toEqual(
+      expect.objectContaining({
+        kind: "ready",
+        repoUrl: "https://github.com/micronaut-projects/micronaut-test-resources",
+        repoFullName: "micronaut-projects/micronaut-test-resources"
+      })
+    );
+  });
+
+  itWithFakeGh("creates a missing Micronaut branch from the default branch", async () => {
     await withFakeGh(
       `#!/bin/sh
 echo "$@" >> "$MICRONAUT_TEST_GH_LOG"
@@ -789,7 +891,7 @@ exit 1
     }
   });
 
-  it("reports when gh is installed but not authenticated", async () => {
+  itWithFakeGh("reports when gh is installed but not authenticated", async () => {
     await withFakeGh(
       `#!/bin/sh
 echo "$@" >> "$MICRONAUT_TEST_GH_LOG"
