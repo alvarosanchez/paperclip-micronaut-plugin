@@ -15,7 +15,13 @@ const stateRoot = persistentStateRoot ?? await mkdtemp(join(tmpdir(), 'paperclip
 const paperclipHome = join(stateRoot, 'paperclip-home');
 const dataDir = join(stateRoot, 'paperclip-data');
 const instanceId = 'paperclip-micronaut-plugin-manual';
+const pluginKey = 'paperclip-micronaut-plugin';
 const pluginDisplayName = 'Micronaut Plugin';
+const pluginDetailTabId = 'micronaut-project-overview';
+const githubOwner = 'micronaut-projects';
+const githubRepo = 'micronaut-core';
+const micronautCoreRepoUrl = `https://github.com/${githubOwner}/${githubRepo}`;
+const projectName = 'Micronaut Core';
 const settingsIndexPath = '/instance/settings/plugins';
 const requestedPort = process.env.PAPERCLIP_E2E_PORT ? Number(process.env.PAPERCLIP_E2E_PORT) : 3100;
 const requestedDbPort = process.env.PAPERCLIP_E2E_DB_PORT ? Number(process.env.PAPERCLIP_E2E_DB_PORT) : 54329;
@@ -284,6 +290,109 @@ async function ensurePluginInstalled(configPath) {
   }
 }
 
+async function ensurePluginRegistered() {
+  const pluginsUrl = new URL('/api/plugins', baseUrl).toString();
+  const plugins = await fetchJson(pluginsUrl);
+  if (!Array.isArray(plugins)) {
+    throw new Error('Expected /api/plugins to return an array.');
+  }
+
+  const plugin = plugins.find((candidate) => {
+    const manifestId = candidate?.manifestJson?.id;
+    return candidate?.pluginKey === pluginKey || manifestId === pluginKey;
+  });
+
+  if (!plugin) {
+    throw new Error(`Expected ${pluginKey} to be present in /api/plugins.`);
+  }
+
+  const detailTab = plugin?.manifestJson?.ui?.slots?.find(
+    (slot) => slot?.type === 'detailTab' && slot?.id === pluginDetailTabId
+  );
+  if (!detailTab) {
+    throw new Error(`Expected ${pluginKey} to expose detail tab ${pluginDetailTabId}.`);
+  }
+
+  return pluginsUrl;
+}
+
+function resolveProjectRepositoryUrl(project) {
+  return (
+    project?.codebase?.repoUrl ??
+    project?.primaryWorkspace?.repoUrl ??
+    project?.workspaces?.find((workspace) => workspace?.isPrimary)?.repoUrl ??
+    project?.workspaces?.find((workspace) => workspace?.repoUrl)?.repoUrl ??
+    null
+  );
+}
+
+async function waitForProjectRepository(projectId, expectedRepoUrl, timeoutMs = 60000) {
+  const deadline = Date.now() + timeoutMs;
+  const projectUrl = new URL(`/api/projects/${projectId}`, baseUrl).toString();
+
+  while (Date.now() < deadline) {
+    const project = await fetchJson(projectUrl);
+    if (resolveProjectRepositoryUrl(project) === expectedRepoUrl) {
+      return project;
+    }
+
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 1000));
+  }
+
+  throw new Error(`Timed out waiting for project ${projectId} to report repo ${expectedRepoUrl}.`);
+}
+
+async function ensureMicronautCoreProject(company) {
+  const projectsUrl = new URL(`/api/companies/${company.id}/projects`, baseUrl).toString();
+  const existingProjects = await fetchJson(projectsUrl);
+  const reusableProject = Array.isArray(existingProjects)
+    ? existingProjects.find(
+        (project) =>
+          resolveProjectRepositoryUrl(project) === micronautCoreRepoUrl ||
+          project?.urlKey === 'micronaut-core' ||
+          project?.name === projectName
+      )
+    : null;
+
+  if (reusableProject?.id) {
+    log(`Reusing project ${reusableProject.name ?? projectName} (${reusableProject.id}).`);
+    return waitForProjectRepository(reusableProject.id, micronautCoreRepoUrl);
+  }
+
+  const createdProject = await fetchJson(projectsUrl, {
+    method: 'POST',
+    body: JSON.stringify({
+      name: projectName,
+      description: 'Manual Micronaut Core project for Paperclip plugin verification.',
+      workspace: {
+        name: 'origin',
+        isPrimary: true,
+        sourceType: 'git_repo',
+        repoUrl: micronautCoreRepoUrl
+      }
+    })
+  });
+
+  if (!createdProject?.id) {
+    throw new Error('Project creation succeeded but did not return a project id.');
+  }
+
+  log(`Created project ${createdProject.name ?? projectName} (${createdProject.id}).`);
+  return waitForProjectRepository(createdProject.id, micronautCoreRepoUrl);
+}
+
+function buildProjectTabUrl(company, project) {
+  const projectRef = project?.urlKey ?? project?.id;
+  if (!projectRef) {
+    throw new Error('Could not determine a project reference for the manual verification URL.');
+  }
+
+  const url = new URL(`/projects/${projectRef}`, baseUrl);
+  url.searchParams.set('tab', `plugin:${pluginKey}:${pluginDetailTabId}`);
+  url.searchParams.set('companyId', company.id);
+  return url.toString();
+}
+
 async function waitForServerExit(timeoutMs) {
   if (!serverProcess) {
     return;
@@ -382,14 +491,20 @@ async function main() {
 
   const company = await ensureCompanySeeded();
   await ensurePluginInstalled(configPath);
-  const manualUrl = new URL(settingsIndexPath, baseUrl).toString();
+  const pluginsUrl = await ensurePluginRegistered();
+  const project = await ensureMicronautCoreProject(company);
+  const settingsUrl = new URL(settingsIndexPath, baseUrl).toString();
+  const manualUrl = buildProjectTabUrl(company, project);
   await runCommand('open', [manualUrl], { stdio: 'ignore' });
 
   console.log('');
   console.log('Manual verification instance is ready.');
-  console.log(`Open: ${manualUrl}`);
+  console.log(`Project tab: ${manualUrl}`);
+  console.log(`Plugin settings: ${settingsUrl}`);
   console.log(`Company: ${company?.name ?? 'Dummy Company'}`);
+  console.log(`Project: ${project?.name ?? projectName}`);
   console.log(`Plugin: ${pluginDisplayName}`);
+  console.log(`Plugins API: ${pluginsUrl}`);
   console.log(`State dir: ${stateRoot}`);
   console.log(`Logs dir: ${join(dataDir, 'logs')}`);
   if (persistentStateRoot) {
@@ -398,7 +513,21 @@ async function main() {
     console.log('State preservation: disabled; this disposable instance will be deleted on exit.');
   }
   console.log('The URL has been opened in your default browser.');
-  console.log(`Confirm that ${pluginDisplayName} appears in the installed plugins list.`);
+  console.log(
+    `Confirm that ${pluginDisplayName} appears in the installed plugins list at ${settingsUrl}.`
+  );
+  console.log(
+    'Then inspect the project detail tabs and confirm the Micronaut tab already shows its icon before you select it. After opening it, confirm the content shows the Micronaut logo, the current GitHub release version, the next version derived from gradle.properties, and branch rows for the default, next minor, and next major branches.'
+  );
+  console.log(
+    'The header should also show a Last checked timestamp plus a refresh control, and refreshing should keep the existing overview visible instead of swapping in a full-page loading state.'
+  );
+  console.log(
+    'Each branch row should show a last-updated value and GitHub-style status pills such as Default, Up to date, X ahead, or Y behind. If the next minor or next major branch does not exist yet, the row should show a Create branch button instead.'
+  );
+  console.log(
+    'If you want the button to create the branch through GitHub, make sure `gh` is installed and authenticated on the Paperclip host with access to the repository first. Creating the branch should update the Micronaut overview in place.'
+  );
   console.log('Press Ctrl+C when you are done inspecting the instance.');
   console.log('');
 

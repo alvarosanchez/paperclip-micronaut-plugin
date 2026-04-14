@@ -5,16 +5,30 @@ const manifest: PaperclipPluginManifestV1 = {
   apiVersion: 1,
   version: "0.1.0",
   displayName: "Micronaut Plugin",
-  description: "Empty Paperclip plugin scaffold for Micronaut workflows.",
+  description: "Project detail tab with Micronaut release, branch, and version metadata.",
   author: "Alvaro Sanchez-Mariscal",
   categories: ["automation"],
-  capabilities: ["instance.settings.register"],
-  instanceConfigSchema: {
-    type: "object",
-    properties: {}
+  capabilities: [
+    "projects.read",
+    "plugin.state.read",
+    "plugin.state.write",
+    "http.outbound",
+    "ui.detailTab.register"
+  ],
+  ui: {
+    slots: [
+      {
+        type: "detailTab",
+        id: "micronaut-project-overview",
+        displayName: "Micronaut",
+        exportName: "MicronautProjectDetailTab",
+        entityTypes: ["project"]
+      }
+    ]
   },
   entrypoints: {
-    worker: "./dist/worker.js"
+    worker: "./dist/worker.js",
+    ui: "./dist/ui"
   }
 };
 
