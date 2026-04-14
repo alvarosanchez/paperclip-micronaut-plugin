@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "private": true,
-  "description": "Empty Paperclip plugin scaffold for Micronaut workflows.",
+  "description": "Paperclip project detail tab for Micronaut release, branch, and version metadata.",
   "scripts": {
     "build": "node ./esbuild.config.mjs",
     "build:rollup": "rollup -c",

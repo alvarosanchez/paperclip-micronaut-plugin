@@ -1,20 +1,35 @@
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
+import { MICRONAUT_PROJECT_DETAIL_TAB_ID } from "./micronaut.js";
 
 const manifest: PaperclipPluginManifestV1 = {
   id: "paperclip-micronaut-plugin",
   apiVersion: 1,
   version: "0.1.0",
   displayName: "Micronaut Plugin",
-  description: "Empty Paperclip plugin scaffold for Micronaut workflows.",
+  description: "Project detail tab with Micronaut release, branch, and version metadata.",
   author: "Alvaro Sanchez-Mariscal",
   categories: ["automation"],
-  capabilities: ["instance.settings.register"],
-  instanceConfigSchema: {
-    type: "object",
-    properties: {}
+  capabilities: [
+    "projects.read",
+    "plugin.state.read",
+    "plugin.state.write",
+    "http.outbound",
+    "ui.detailTab.register"
+  ],
+  ui: {
+    slots: [
+      {
+        type: "detailTab",
+        id: MICRONAUT_PROJECT_DETAIL_TAB_ID,
+        displayName: "Micronaut",
+        exportName: "MicronautProjectDetailTab",
+        entityTypes: ["project"]
+      }
+    ]
   },
   entrypoints: {
-    worker: "./dist/worker.js"
+    worker: "./dist/worker.js",
+    ui: "./dist/ui"
   }
 };
 
