@@ -18,10 +18,39 @@ const instanceId = 'paperclip-micronaut-plugin-manual';
 const pluginKey = 'paperclip-micronaut-plugin';
 const pluginDisplayName = 'Micronaut Plugin';
 const pluginDetailTabId = 'micronaut-project-overview';
+const micronautTabLabel = 'Micronaut branches';
 const githubOwner = 'micronaut-projects';
 const githubRepo = 'micronaut-core';
 const micronautCoreRepoUrl = `https://github.com/${githubOwner}/${githubRepo}`;
 const projectName = 'Micronaut Core';
+const seededCeoAgentName = 'Micronaut CEO';
+const seededEngineerAgentName = 'Micronaut Software Engineer';
+const seededCeoAgentPayload = {
+  name: seededCeoAgentName,
+  role: 'ceo',
+  title: 'Chief Executive Officer',
+  icon: 'crown',
+  adapterType: 'codex_local',
+  adapterConfig: {
+    model: 'gpt-5.4'
+  },
+  permissions: {
+    canCreateAgents: true
+  }
+};
+const seededEngineerAgentPayload = {
+  name: seededEngineerAgentName,
+  role: 'engineer',
+  title: 'Software Engineer',
+  icon: 'wrench',
+  adapterType: 'codex_local',
+  adapterConfig: {
+    model: 'gpt-5.4'
+  },
+  permissions: {
+    canCreateAgents: false
+  }
+};
 const settingsIndexPath = '/instance/settings/plugins';
 const requestedPort = process.env.PAPERCLIP_E2E_PORT ? Number(process.env.PAPERCLIP_E2E_PORT) : 3100;
 const requestedDbPort = process.env.PAPERCLIP_E2E_DB_PORT ? Number(process.env.PAPERCLIP_E2E_DB_PORT) : 54329;
@@ -50,6 +79,16 @@ let embeddedDbPort;
 
 function log(message) {
   console.log(`[paperclip-micronaut-plugin:manual] ${message}`);
+}
+
+function matchesSeededAgent(agent, payload) {
+  return (
+    agent?.name === payload.name &&
+    agent?.role === payload.role &&
+    agent?.title === payload.title &&
+    agent?.adapterType === payload.adapterType &&
+    agent?.adapterConfig?.model === payload.adapterConfig.model
+  );
 }
 
 function getPaperclipCommandArgs(args) {
@@ -272,6 +311,31 @@ async function ensureCompanySeeded() {
   return createdCompany;
 }
 
+async function ensureAgentSeeded(company, payload, fallbackName) {
+  const agentsUrl = new URL(`/api/companies/${company.id}/agents`, baseUrl).toString();
+  const existingAgents = await fetchJson(agentsUrl);
+  const reusableAgent = Array.isArray(existingAgents)
+    ? existingAgents.find((agent) => matchesSeededAgent(agent, payload))
+    : null;
+
+  if (reusableAgent?.id) {
+    log(`Reusing ${payload.title ?? 'agent'} ${reusableAgent.name ?? fallbackName} (${reusableAgent.id}).`);
+    return reusableAgent;
+  }
+
+  const createdAgent = await fetchJson(agentsUrl, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+
+  if (!createdAgent?.id) {
+    throw new Error(`${payload.title ?? 'Agent'} creation succeeded but did not return an agent id.`);
+  }
+
+  log(`Seeded ${payload.title ?? 'agent'} ${createdAgent.name ?? fallbackName} (${createdAgent.id}).`);
+  return createdAgent;
+}
+
 async function ensurePluginInstalled(configPath) {
   try {
     await runCommand(
@@ -490,6 +554,12 @@ async function main() {
   log(`Paperclip server is ready at ${baseUrl}.`);
 
   const company = await ensureCompanySeeded();
+  const ceoAgent = await ensureAgentSeeded(company, seededCeoAgentPayload, seededCeoAgentName);
+  const engineerAgent = await ensureAgentSeeded(
+    company,
+    seededEngineerAgentPayload,
+    seededEngineerAgentName
+  );
   await ensurePluginInstalled(configPath);
   const pluginsUrl = await ensurePluginRegistered();
   const project = await ensureMicronautCoreProject(company);
@@ -504,6 +574,16 @@ async function main() {
   console.log(`Company: ${company?.name ?? 'Dummy Company'}`);
   console.log(`Project: ${project?.name ?? projectName}`);
   console.log(`Plugin: ${pluginDisplayName}`);
+  console.log(
+    `CEO agent: ${ceoAgent?.name ?? seededCeoAgentName} (${ceoAgent?.adapterType ?? 'unknown'}, ${
+      ceoAgent?.adapterConfig?.model ?? 'unknown model'
+    })`
+  );
+  console.log(
+    `Software engineer: ${engineerAgent?.name ?? seededEngineerAgentName} (${engineerAgent?.adapterType ?? 'unknown'}, ${
+      engineerAgent?.adapterConfig?.model ?? 'unknown model'
+    })`
+  );
   console.log(`Plugins API: ${pluginsUrl}`);
   console.log(`State dir: ${stateRoot}`);
   console.log(`Logs dir: ${join(dataDir, 'logs')}`);
@@ -517,7 +597,10 @@ async function main() {
     `Confirm that ${pluginDisplayName} appears in the installed plugins list at ${settingsUrl}.`
   );
   console.log(
-    'Then inspect the project detail tabs and confirm the Micronaut tab already shows its icon before you select it. After opening it, confirm the content shows the Micronaut logo, the current GitHub release version, the next version derived from gradle.properties, and branch rows for the default, next minor, and next major branches.'
+    `Then inspect the project detail tabs and open the ${micronautTabLabel} tab. Confirm the content shows the current GitHub release version, the next version derived from gradle.properties, and branch rows for the default, next minor, and next major branches.`
+  );
+  console.log(
+    'Verify both light and dark themes: the tab should remain comfortably readable instead of washing out the text.'
   );
   console.log(
     'The header should also show a Last checked timestamp plus a refresh control, and refreshing should keep the existing overview visible instead of swapping in a full-page loading state.'
@@ -527,6 +610,9 @@ async function main() {
   );
   console.log(
     'If you want the button to create the branch through GitHub, make sure `gh` is installed and authenticated on the Paperclip host with access to the repository first. Creating the branch should update the Micronaut overview in place.'
+  );
+  console.log(
+    'When you start a merge up, the plugin should ask you to pick an agent, create a real Paperclip issue in todo for that agent, and replace the button with a linked issue plus status icon until the issue is closed.'
   );
   console.log('Press Ctrl+C when you are done inspecting the instance.');
   console.log('');

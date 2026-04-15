@@ -1,16 +1,21 @@
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import type { Project } from "@paperclipai/plugin-sdk";
+import type { Agent, Project } from "@paperclipai/plugin-sdk";
 import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import manifest from "../src/manifest.js";
 import {
   MICRONAUT_CREATE_BRANCH_ACTION_KEY,
+  MICRONAUT_MERGE_UP_STATE_DATA_KEY,
   MICRONAUT_PROJECT_DETAIL_TAB_ID,
   MICRONAUT_PROJECT_OVERVIEW_DATA_KEY,
   MICRONAUT_REFRESH_PROJECT_OVERVIEW_ACTION_KEY,
+  MICRONAUT_SET_MERGE_UP_AGENT_ACTION_KEY,
+  MICRONAUT_START_MERGE_UP_ACTION_KEY,
   type MicronautCreateBranchResult,
+  type MicronautMergeUpState,
+  type MicronautStartMergeUpResult,
   type MicronautProjectOverview
 } from "../src/micronaut.js";
 import plugin from "../src/worker.js";
@@ -53,6 +58,56 @@ function createProject(repoUrl: string): Project {
   };
 }
 
+function createAgent(id: string, overrides: Partial<Agent> = {}): Agent {
+  const now = new Date("2026-01-01T00:00:00.000Z");
+
+  return {
+    id,
+    companyId: "company-1",
+    name: `Agent ${id}`,
+    urlKey: id,
+    role: "engineer",
+    title: "Software Engineer",
+    icon: null,
+    status: "idle",
+    reportsTo: null,
+    capabilities: null,
+    adapterType: "codex_local",
+    adapterConfig: {},
+    runtimeConfig: {},
+    budgetMonthlyCents: 0,
+    spentMonthlyCents: 0,
+    pauseReason: null,
+    pausedAt: null,
+    permissions: {
+      canCreateAgents: false
+    },
+    lastHeartbeatAt: now,
+    metadata: null,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides
+  };
+}
+
+function buildCompanySettingsScope(companyId: string) {
+  return {
+    scopeKind: "company" as const,
+    scopeId: companyId,
+    namespace: "micronaut",
+    stateKey: "company-settings"
+  };
+}
+
+function buildProjectMergeUpIssuesScope(projectId: string) {
+  return {
+    scopeKind: "project" as const,
+    scopeId: projectId,
+    namespace: "micronaut",
+    stateKey: "merge-up-issues"
+  };
+}
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -62,13 +117,16 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-function textResponse(body: string): Response {
-  return new Response(body, {
-    status: 200,
-    headers: {
-      "content-type": "text/plain; charset=utf-8"
-    }
+function gitHubContentsResponse(body: string): Response {
+  return jsonResponse({
+    type: "file",
+    encoding: "base64",
+    content: Buffer.from(body, "utf8").toString("base64")
   });
+}
+
+function gradlePropertiesContentsUrl(ref: string): string {
+  return `https://api.github.com/repos/micronaut-projects/micronaut-test-resources/contents/gradle.properties?ref=${encodeURIComponent(ref)}`;
 }
 
 async function withPathOverride(pathValue: string, run: () => Promise<void>): Promise<void> {
@@ -228,11 +286,12 @@ describe("micronaut project detail tab", () => {
         });
       }
 
-      if (
-        url ===
-        "https://raw.githubusercontent.com/micronaut-projects/micronaut-test-resources/4.0.x/gradle.properties"
-      ) {
-        return textResponse("projectVersion=4.0.0-SNAPSHOT\n");
+      if (url === gradlePropertiesContentsUrl("4.0.x")) {
+        return gitHubContentsResponse("projectVersion=4.0.0-SNAPSHOT\n");
+      }
+
+      if (url === gradlePropertiesContentsUrl("4.1.x")) {
+        return gitHubContentsResponse("projectVersion=4.0.0-SNAPSHOT\n");
       }
 
       return new Response("Not found", { status: 404 });
@@ -241,6 +300,7 @@ describe("micronaut project detail tab", () => {
 
   afterEach(() => {
     global.fetch = originalFetch;
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -257,6 +317,11 @@ describe("micronaut project detail tab", () => {
 
     expect(manifest.capabilities).toEqual([
       "projects.read",
+      "agents.read",
+      "agents.invoke",
+      "issues.read",
+      "issues.create",
+      "issues.update",
       "plugin.state.read",
       "plugin.state.write",
       "http.outbound",
@@ -267,7 +332,7 @@ describe("micronaut project detail tab", () => {
       expect.objectContaining({
         type: "detailTab",
         id: MICRONAUT_PROJECT_DETAIL_TAB_ID,
-        displayName: "Micronaut",
+        displayName: "Micronaut branches",
         exportName: "MicronautProjectDetailTab",
         entityTypes: ["project"]
       })
@@ -307,7 +372,15 @@ describe("micronaut project detail tab", () => {
           lastUpdatedAt: "2026-03-18T10:15:00.000Z",
           lastCommitSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           lastCommitUrl:
-            "https://github.com/micronaut-projects/micronaut-test-resources/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            "https://github.com/micronaut-projects/micronaut-test-resources/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          projectVersion: "4.0.0-SNAPSHOT",
+          projectVersionUrl:
+            "https://github.com/micronaut-projects/micronaut-test-resources/blob/4.0.x/gradle.properties",
+          expectedProjectVersion: "4.0.0-SNAPSHOT",
+          versionStatus: "default",
+          canCreateBranch: false,
+          canMergeUp: false,
+          canSetDefault: false
         },
         {
           role: "nextMinor",
@@ -323,7 +396,15 @@ describe("micronaut project detail tab", () => {
           lastUpdatedAt: "2026-03-20T12:30:00.000Z",
           lastCommitSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           lastCommitUrl:
-            "https://github.com/micronaut-projects/micronaut-test-resources/commit/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            "https://github.com/micronaut-projects/micronaut-test-resources/commit/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          projectVersion: "4.0.0-SNAPSHOT",
+          projectVersionUrl:
+            "https://github.com/micronaut-projects/micronaut-test-resources/blob/4.1.x/gradle.properties",
+          expectedProjectVersion: "4.1.0-SNAPSHOT",
+          versionStatus: "behind",
+          canCreateBranch: false,
+          canMergeUp: true,
+          canSetDefault: false
         },
         {
           role: "nextMajor",
@@ -338,7 +419,14 @@ describe("micronaut project detail tab", () => {
           behindBy: null,
           lastUpdatedAt: null,
           lastCommitSha: null,
-          lastCommitUrl: null
+          lastCommitUrl: null,
+          projectVersion: null,
+          projectVersionUrl: null,
+          expectedProjectVersion: "5.0.0-SNAPSHOT",
+          versionStatus: "missing",
+          canCreateBranch: true,
+          canMergeUp: false,
+          canSetDefault: false
         }
       ],
       warnings: []
@@ -356,13 +444,6 @@ describe("micronaut project detail tab", () => {
           },
           403
         );
-      }
-
-      if (
-        url ===
-        "https://raw.githubusercontent.com/micronaut-projects/micronaut-test-resources/4.0.x/gradle.properties"
-      ) {
-        return textResponse("projectVersion=4.0.0-SNAPSHOT\n");
       }
 
       return new Response("Not found", { status: 404 });
@@ -397,6 +478,14 @@ if [ "$1" = "api" ] && [ "$2" = "repos/micronaut-projects/micronaut-test-resourc
 fi
 if [ "$1" = "api" ] && [ "$2" = "repos/micronaut-projects/micronaut-test-resources/compare/4.0.x...4.1.x" ]; then
   printf '%s\\n' '{"html_url":"https://github.com/micronaut-projects/micronaut-test-resources/compare/4.0.x...4.1.x","ahead_by":3,"behind_by":1}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/micronaut-projects/micronaut-test-resources/contents/gradle.properties?ref=4.0.x" ]; then
+  printf '%s\\n' '{"type":"file","encoding":"base64","content":"${Buffer.from("projectVersion=4.0.0-SNAPSHOT\n", "utf8").toString("base64")}"}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/micronaut-projects/micronaut-test-resources/contents/gradle.properties?ref=4.1.x" ]; then
+  printf '%s\\n' '{"type":"file","encoding":"base64","content":"${Buffer.from("projectVersion=4.0.0-SNAPSHOT\n", "utf8").toString("base64")}"}'
   exit 0
 fi
 if [ "$1" = "api" ] && [ "$2" = "repos/micronaut-projects/micronaut-test-resources/branches/5.0.x" ]; then
@@ -451,7 +540,15 @@ exit 1
               lastUpdatedAt: "2026-03-18T10:15:00.000Z",
               lastCommitSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
               lastCommitUrl:
-                "https://github.com/micronaut-projects/micronaut-test-resources/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                "https://github.com/micronaut-projects/micronaut-test-resources/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              projectVersion: "4.0.0-SNAPSHOT",
+              projectVersionUrl:
+                "https://github.com/micronaut-projects/micronaut-test-resources/blob/4.0.x/gradle.properties",
+              expectedProjectVersion: "4.0.0-SNAPSHOT",
+              versionStatus: "default",
+              canCreateBranch: false,
+              canMergeUp: false,
+              canSetDefault: false
             },
             {
               role: "nextMinor",
@@ -467,7 +564,15 @@ exit 1
               lastUpdatedAt: "2026-03-20T12:30:00.000Z",
               lastCommitSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
               lastCommitUrl:
-                "https://github.com/micronaut-projects/micronaut-test-resources/commit/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                "https://github.com/micronaut-projects/micronaut-test-resources/commit/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              projectVersion: "4.0.0-SNAPSHOT",
+              projectVersionUrl:
+                "https://github.com/micronaut-projects/micronaut-test-resources/blob/4.1.x/gradle.properties",
+              expectedProjectVersion: "4.1.0-SNAPSHOT",
+              versionStatus: "behind",
+              canCreateBranch: false,
+              canMergeUp: true,
+              canSetDefault: false
             },
             {
               role: "nextMajor",
@@ -482,7 +587,14 @@ exit 1
               behindBy: null,
               lastUpdatedAt: null,
               lastCommitSha: null,
-              lastCommitUrl: null
+              lastCommitUrl: null,
+              projectVersion: null,
+              projectVersionUrl: null,
+              expectedProjectVersion: "5.0.0-SNAPSHOT",
+              versionStatus: "missing",
+              canCreateBranch: true,
+              canMergeUp: false,
+              canSetDefault: false
             }
           ],
           warnings: []
@@ -493,6 +605,183 @@ exit 1
         expect(commandLog).toContain("api repos/micronaut-projects/micronaut-test-resources/releases/latest");
         expect(commandLog).toContain("api repos/micronaut-projects/micronaut-test-resources/branches/4.0.x");
         expect(commandLog).toContain("api repos/micronaut-projects/micronaut-test-resources/compare/4.0.x...4.1.x");
+        expect(commandLog).toContain(
+          "api repos/micronaut-projects/micronaut-test-resources/contents/gradle.properties?ref=4.0.x"
+        );
+      }
+    );
+  });
+
+  itWithFakeGh("falls back to gh for gradle.properties when GitHub contents reads abort", async () => {
+    global.fetch = vi.fn(async (input) => {
+      const url = String(input);
+
+      if (url === "https://api.github.com/repos/micronaut-projects/micronaut-test-resources") {
+        return jsonResponse({
+          default_branch: "4.0.x"
+        });
+      }
+
+      if (
+        url ===
+        "https://api.github.com/repos/micronaut-projects/micronaut-test-resources/branches/4.0.x"
+      ) {
+        return jsonResponse({
+          name: "4.0.x",
+          commit: {
+            sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        });
+      }
+
+      if (
+        url ===
+        "https://api.github.com/repos/micronaut-projects/micronaut-test-resources/commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ) {
+        return jsonResponse({
+          html_url:
+            "https://github.com/micronaut-projects/micronaut-test-resources/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          commit: {
+            committer: {
+              date: "2026-03-18T10:15:00.000Z"
+            }
+          }
+        });
+      }
+
+      if (
+        url ===
+        "https://api.github.com/repos/micronaut-projects/micronaut-test-resources/branches/4.1.x"
+      ) {
+        return jsonResponse({
+          name: "4.1.x",
+          commit: {
+            sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        });
+      }
+
+      if (
+        url ===
+        "https://api.github.com/repos/micronaut-projects/micronaut-test-resources/commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ) {
+        return jsonResponse({
+          html_url:
+            "https://github.com/micronaut-projects/micronaut-test-resources/commit/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          commit: {
+            committer: {
+              date: "2026-03-20T12:30:00.000Z"
+            }
+          }
+        });
+      }
+
+      if (
+        url ===
+        "https://api.github.com/repos/micronaut-projects/micronaut-test-resources/compare/4.0.x...4.1.x"
+      ) {
+        return jsonResponse({
+          html_url:
+            "https://github.com/micronaut-projects/micronaut-test-resources/compare/4.0.x...4.1.x",
+          ahead_by: 3,
+          behind_by: 1
+        });
+      }
+
+      if (
+        url ===
+        "https://api.github.com/repos/micronaut-projects/micronaut-test-resources/branches/5.0.x"
+      ) {
+        return jsonResponse(
+          {
+            message: "Branch not found"
+          },
+          404
+        );
+      }
+
+      if (
+        url ===
+        "https://api.github.com/repos/micronaut-projects/micronaut-test-resources/releases/latest"
+      ) {
+        return jsonResponse({
+          tag_name: "v3.0.0",
+          html_url:
+            "https://github.com/micronaut-projects/micronaut-test-resources/releases/tag/v3.0.0"
+        });
+      }
+
+      if (url === gradlePropertiesContentsUrl("4.0.x") || url === gradlePropertiesContentsUrl("4.1.x")) {
+        throw new Error("The operation was aborted");
+      }
+
+      return new Response("Not found", { status: 404 });
+    }) as typeof fetch;
+
+    await withFakeGh(
+      `#!/bin/sh
+echo "$@" >> "$MICRONAUT_TEST_GH_LOG"
+if [ "$1" = "api" ] && [ "$2" = "repos/micronaut-projects/micronaut-test-resources/contents/gradle.properties?ref=4.0.x" ]; then
+  printf '%s\\n' '{"type":"file","encoding":"base64","content":"${Buffer.from("projectVersion=4.0.0-SNAPSHOT\n", "utf8").toString("base64")}"}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/micronaut-projects/micronaut-test-resources/contents/gradle.properties?ref=4.1.x" ]; then
+  printf '%s\\n' '{"type":"file","encoding":"base64","content":"${Buffer.from("projectVersion=4.0.0-SNAPSHOT\n", "utf8").toString("base64")}"}'
+  exit 0
+fi
+echo "unexpected gh invocation: $@" >&2
+exit 1
+`,
+      async (logPath) => {
+        const harness = createTestHarness({
+          manifest,
+          capabilities: [...manifest.capabilities]
+        });
+        harness.seed({
+          projects: [createProject("https://github.com/micronaut-projects/micronaut-test-resources")]
+        });
+
+        await plugin.definition.setup(harness.ctx);
+
+        const data = await harness.getData<MicronautProjectOverview>(
+          MICRONAUT_PROJECT_OVERVIEW_DATA_KEY,
+          {
+            companyId: "company-1",
+            projectId: "project-1"
+          }
+        );
+
+        expect(data).toEqual(
+          expect.objectContaining({
+            kind: "ready",
+            nextVersion: "4.0.0",
+            warnings: []
+          })
+        );
+        if (data.kind !== "ready") {
+          return;
+        }
+
+        expect(data.branches).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              role: "default",
+              projectVersion: "4.0.0-SNAPSHOT"
+            }),
+            expect.objectContaining({
+              role: "nextMinor",
+              projectVersion: "4.0.0-SNAPSHOT"
+            })
+          ])
+        );
+
+        const commandLog = await readFile(logPath, "utf8");
+        expect(commandLog).toContain(
+          "api repos/micronaut-projects/micronaut-test-resources/contents/gradle.properties?ref=4.0.x"
+        );
+        expect(commandLog).toContain(
+          "api repos/micronaut-projects/micronaut-test-resources/contents/gradle.properties?ref=4.1.x"
+        );
       }
     );
   });
@@ -665,11 +954,12 @@ exit 1
         });
       }
 
-      if (
-        url ===
-        "https://raw.githubusercontent.com/micronaut-projects/micronaut-test-resources/4.0.x/gradle.properties"
-      ) {
-        return textResponse("projectVersion=4.0.0-SNAPSHOT\n");
+      if (url === gradlePropertiesContentsUrl("4.0.x")) {
+        return gitHubContentsResponse("projectVersion=4.0.0-SNAPSHOT\n");
+      }
+
+      if (url === gradlePropertiesContentsUrl("4.1.x")) {
+        return gitHubContentsResponse("projectVersion=4.0.0-SNAPSHOT\n");
       }
 
       return new Response("Not found", { status: 404 });
@@ -747,6 +1037,555 @@ exit 1
       })
     );
     expect(releaseFetchCount()).toBe(releaseCallsAfterFirstRead + 1);
+  });
+
+  it("marks an ahead branch as set-default eligible even when its projectVersion is behind", async () => {
+    global.fetch = vi.fn(async (input) => {
+      const url = String(input);
+
+      if (url === "https://api.github.com/repos/micronaut-projects/micronaut-test-resources") {
+        return jsonResponse({
+          default_branch: "4.0.x"
+        });
+      }
+
+      if (
+        url ===
+        "https://api.github.com/repos/micronaut-projects/micronaut-test-resources/branches/4.0.x"
+      ) {
+        return jsonResponse({
+          name: "4.0.x",
+          commit: {
+            sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        });
+      }
+
+      if (
+        url ===
+        "https://api.github.com/repos/micronaut-projects/micronaut-test-resources/commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ) {
+        return jsonResponse({
+          html_url:
+            "https://github.com/micronaut-projects/micronaut-test-resources/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          commit: {
+            committer: {
+              date: "2026-03-18T10:15:00.000Z"
+            }
+          }
+        });
+      }
+
+      if (
+        url ===
+        "https://api.github.com/repos/micronaut-projects/micronaut-test-resources/branches/4.1.x"
+      ) {
+        return jsonResponse({
+          name: "4.1.x",
+          commit: {
+            sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        });
+      }
+
+      if (
+        url ===
+        "https://api.github.com/repos/micronaut-projects/micronaut-test-resources/commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ) {
+        return jsonResponse({
+          html_url:
+            "https://github.com/micronaut-projects/micronaut-test-resources/commit/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          commit: {
+            committer: {
+              date: "2026-03-20T12:30:00.000Z"
+            }
+          }
+        });
+      }
+
+      if (
+        url ===
+        "https://api.github.com/repos/micronaut-projects/micronaut-test-resources/compare/4.0.x...4.1.x"
+      ) {
+        return jsonResponse({
+          html_url:
+            "https://github.com/micronaut-projects/micronaut-test-resources/compare/4.0.x...4.1.x",
+          ahead_by: 2,
+          behind_by: 0
+        });
+      }
+
+      if (
+        url ===
+        "https://api.github.com/repos/micronaut-projects/micronaut-test-resources/branches/5.0.x"
+      ) {
+        return jsonResponse(
+          {
+            message: "Branch not found"
+          },
+          404
+        );
+      }
+
+      if (
+        url ===
+        "https://api.github.com/repos/micronaut-projects/micronaut-test-resources/releases/latest"
+      ) {
+        return jsonResponse({
+          tag_name: "v3.0.0",
+          html_url:
+            "https://github.com/micronaut-projects/micronaut-test-resources/releases/tag/v3.0.0"
+        });
+      }
+
+      if (url === gradlePropertiesContentsUrl("4.0.x")) {
+        return gitHubContentsResponse("projectVersion=4.0.0-SNAPSHOT\n");
+      }
+
+      if (url === gradlePropertiesContentsUrl("4.1.x")) {
+        return gitHubContentsResponse("projectVersion=4.0.0-SNAPSHOT\n");
+      }
+
+      return new Response("Not found", { status: 404 });
+    }) as typeof fetch;
+
+    const harness = createTestHarness({
+      manifest,
+      capabilities: [...manifest.capabilities]
+    });
+    harness.seed({
+      projects: [createProject("https://github.com/micronaut-projects/micronaut-test-resources")]
+    });
+
+    await plugin.definition.setup(harness.ctx);
+
+    const data = await harness.getData<MicronautProjectOverview>(
+      MICRONAUT_PROJECT_OVERVIEW_DATA_KEY,
+      {
+        companyId: "company-1",
+        projectId: "project-1"
+      }
+    );
+
+    expect(data.kind).toBe("ready");
+    if (data.kind !== "ready") {
+      return;
+    }
+
+    expect(data.branches).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "nextMinor",
+          name: "4.1.x",
+          syncStatus: "ahead",
+          aheadBy: 2,
+          behindBy: 0,
+          projectVersion: "4.0.0-SNAPSHOT",
+          expectedProjectVersion: "4.1.0-SNAPSHOT",
+          versionStatus: "behind",
+          canMergeUp: false,
+          canSetDefault: true
+        })
+      ])
+    );
+  });
+
+  it("reads merge-up state, lists available agents, and clears deleted preferences", async () => {
+    const harness = createTestHarness({
+      manifest,
+      capabilities: [...manifest.capabilities]
+    });
+    harness.seed({
+      projects: [createProject("https://github.com/micronaut-projects/micronaut-test-resources")],
+      agents: [
+        createAgent("agent-b", { name: "Beta Engineer", icon: "rocket" }),
+        createAgent("agent-a", { name: "Alpha Engineer", icon: "crown" }),
+        createAgent("agent-paused", {
+          name: "Paused Engineer",
+          icon: "shield",
+          status: "paused"
+        }),
+        createAgent("agent-pending", {
+          name: "Pending Engineer",
+          status: "pending_approval"
+        }),
+        createAgent("agent-terminated", {
+          name: "Terminated Engineer",
+          status: "terminated"
+        })
+      ]
+    });
+
+    await plugin.definition.setup(harness.ctx);
+    await harness.ctx.state.set(buildCompanySettingsScope("company-1"), {
+      version: 1,
+      preferredMergeUpAgentId: "deleted-agent"
+    });
+
+    const state = await harness.getData<MicronautMergeUpState>(MICRONAUT_MERGE_UP_STATE_DATA_KEY, {
+      companyId: "company-1",
+      projectId: "project-1"
+    });
+
+    expect(state).toEqual({
+      kind: "ready",
+      preferredAgentId: null,
+      preferredAgentName: null,
+      agents: [
+        {
+          id: "agent-a",
+          name: "Alpha Engineer",
+          urlKey: "agent-a",
+          title: "Software Engineer",
+          icon: "crown",
+          status: "idle"
+        },
+        {
+          id: "agent-b",
+          name: "Beta Engineer",
+          urlKey: "agent-b",
+          title: "Software Engineer",
+          icon: "rocket",
+          status: "idle"
+        },
+        {
+          id: "agent-paused",
+          name: "Paused Engineer",
+          urlKey: "agent-paused",
+          title: "Software Engineer",
+          icon: "shield",
+          status: "paused"
+        }
+      ],
+      issues: []
+    });
+    expect(harness.getState(buildCompanySettingsScope("company-1"))).toEqual({
+      version: 1,
+      preferredMergeUpAgentId: null
+    });
+  });
+
+  it("stores the preferred merge-up agent for the company", async () => {
+    const harness = createTestHarness({
+      manifest,
+      capabilities: [...manifest.capabilities]
+    });
+    harness.seed({
+      projects: [createProject("https://github.com/micronaut-projects/micronaut-test-resources")],
+      agents: [
+        createAgent("agent-a", { name: "Alpha Engineer" }),
+        createAgent("agent-b", { name: "Beta Engineer", icon: "rocket" })
+      ]
+    });
+
+    await plugin.definition.setup(harness.ctx);
+
+    const selectedAgent = await harness.performAction(MICRONAUT_SET_MERGE_UP_AGENT_ACTION_KEY, {
+      companyId: "company-1",
+      agentId: "agent-b"
+    });
+
+    expect(selectedAgent).toEqual({
+      id: "agent-b",
+      name: "Beta Engineer",
+      urlKey: "agent-b",
+      title: "Software Engineer",
+      icon: "rocket",
+      status: "idle"
+    });
+
+    const state = await harness.getData<MicronautMergeUpState>(MICRONAUT_MERGE_UP_STATE_DATA_KEY, {
+      companyId: "company-1",
+      projectId: "project-1"
+    });
+
+    expect(state.preferredAgentId).toBe("agent-b");
+    expect(state.preferredAgentName).toBe("Beta Engineer");
+    expect(harness.getState(buildCompanySettingsScope("company-1"))).toEqual({
+      version: 1,
+      preferredMergeUpAgentId: "agent-b"
+    });
+  });
+
+  it("starts a merge-up issue, remembers the selected agent, and persists tracked state", async () => {
+    const harness = createTestHarness({
+      manifest,
+      capabilities: [...manifest.capabilities]
+    });
+    harness.seed({
+      projects: [createProject("https://github.com/micronaut-projects/micronaut-test-resources")],
+      agents: [createAgent("agent-merge", { name: "Merge Bot" })]
+    });
+    const invokeAgentSpy = vi.spyOn(harness.ctx.agents, "invoke");
+    const createIssueSpy = vi.spyOn(harness.ctx.issues, "create");
+    const updateIssueSpy = vi.spyOn(harness.ctx.issues, "update");
+
+    await plugin.definition.setup(harness.ctx);
+
+    const result = await harness.performAction<MicronautStartMergeUpResult>(
+      MICRONAUT_START_MERGE_UP_ACTION_KEY,
+      {
+        companyId: "company-1",
+        projectId: "project-1",
+        targetBranch: "4.1.x",
+        agentId: "agent-merge"
+      }
+    );
+
+    expect(result).toEqual({
+      status: "created",
+      issue: expect.objectContaining({
+        targetBranch: "4.1.x",
+        sourceBranch: "4.0.x",
+        issueId: expect.any(String),
+        issueIdentifier: expect.any(String),
+        issueTitle: "Merge up 4.0.x into 4.1.x",
+        pullRequestUrl: null,
+        status: "todo",
+        agentId: "agent-merge",
+        agentName: "Merge Bot",
+        agentUrlKey: "agent-merge",
+        createdAt: expect.any(String),
+        updatedAt: expect.any(String),
+        closedAt: null
+      })
+    });
+    expect(harness.getState(buildCompanySettingsScope("company-1"))).toEqual({
+      version: 1,
+      preferredMergeUpAgentId: "agent-merge"
+    });
+    expect(createIssueSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        companyId: "company-1",
+        projectId: "project-1",
+        title: "Merge up 4.0.x into 4.1.x",
+        assigneeAgentId: "agent-merge",
+        priority: "medium"
+      })
+    );
+    const issueCreateRequest = createIssueSpy.mock.lastCall?.[0];
+    expect(issueCreateRequest?.description).toContain("Project: Micronaut Test Resources");
+    expect(issueCreateRequest?.description).toContain(
+      "Repository: micronaut-projects/micronaut-test-resources"
+    );
+    expect(issueCreateRequest?.description).toContain(
+      "Never push directly to `4.0.x` or `4.1.x`."
+    );
+    expect(issueCreateRequest?.description).toContain(
+      "projectVersion=4.0.0-SNAPSHOT` becomes `projectVersion=4.1.0-SNAPSHOT`"
+    );
+    expect(updateIssueSpy).toHaveBeenCalledWith(
+      result.issue.issueId,
+      { status: "todo" },
+      "company-1",
+    );
+    expect(invokeAgentSpy).toHaveBeenCalledWith(
+      "agent-merge",
+      "company-1",
+      expect.objectContaining({
+        reason: "issue_assigned",
+        prompt: expect.stringContaining("Open your assigned issue queue, pick up that issue immediately")
+      })
+    );
+    const invokeRequest = invokeAgentSpy.mock.lastCall?.[2];
+    expect(invokeRequest?.prompt).toContain("Merge up 4.0.x into 4.1.x");
+    expect(invokeRequest?.prompt).toContain("micronaut-projects/micronaut-test-resources");
+    expect(harness.getState(buildProjectMergeUpIssuesScope("project-1"))).toEqual({
+      version: 1,
+      issues: [
+        expect.objectContaining({
+          issueId: result.issue.issueId,
+          targetBranch: "4.1.x",
+          sourceBranch: "4.0.x",
+          issueTitle: "Merge up 4.0.x into 4.1.x",
+          agentId: "agent-merge",
+          agentName: "Merge Bot",
+          agentUrlKey: "agent-merge",
+          createdAt: expect.any(String)
+        })
+      ]
+    });
+
+    const state = await harness.getData<MicronautMergeUpState>(MICRONAUT_MERGE_UP_STATE_DATA_KEY, {
+      companyId: "company-1",
+      projectId: "project-1"
+    });
+
+    expect(state.preferredAgentId).toBe("agent-merge");
+    expect(state.preferredAgentName).toBe("Merge Bot");
+    expect(state.issues).toEqual([
+      expect.objectContaining({
+        issueId: result.issue.issueId,
+        targetBranch: "4.1.x",
+        sourceBranch: "4.0.x",
+        issueTitle: "Merge up 4.0.x into 4.1.x",
+        pullRequestUrl: null,
+        status: "todo",
+        agentUrlKey: "agent-merge",
+        closedAt: null
+      })
+    ]);
+  });
+
+  it("hydrates the latest pull request URL from merge-up issue comments after the issue closes", async () => {
+    const harness = createTestHarness({
+      manifest,
+      capabilities: [...manifest.capabilities]
+    });
+    harness.seed({
+      projects: [createProject("https://github.com/micronaut-projects/micronaut-test-resources")],
+      agents: [createAgent("agent-merge", { name: "Merge Bot" })]
+    });
+
+    await plugin.definition.setup(harness.ctx);
+
+    const result = await harness.performAction<MicronautStartMergeUpResult>(
+      MICRONAUT_START_MERGE_UP_ACTION_KEY,
+      {
+        companyId: "company-1",
+        projectId: "project-1",
+        targetBranch: "4.1.x",
+        agentId: "agent-merge"
+      }
+    );
+
+    vi.spyOn(harness.ctx.issues, "listComments").mockResolvedValue([
+      {
+        companyId: "company-1",
+        id: "comment-1",
+        issueId: result.issue.issueId,
+        authorAgentId: "agent-merge",
+        authorUserId: null,
+        body: "Older PR https://github.com/micronaut-projects/micronaut-test-resources/pull/321",
+        createdAt: new Date("2026-04-15T08:35:00.000Z"),
+        updatedAt: new Date("2026-04-15T08:35:00.000Z")
+      },
+      {
+        companyId: "company-1",
+        id: "comment-2",
+        issueId: result.issue.issueId,
+        authorAgentId: "agent-merge",
+        authorUserId: null,
+        body: "Ready for review: https://github.com/micronaut-projects/micronaut-test-resources/pull/654",
+        createdAt: new Date("2026-04-15T08:40:00.000Z"),
+        updatedAt: new Date("2026-04-15T08:40:00.000Z")
+      }
+    ]);
+    await harness.ctx.issues.update(result.issue.issueId, { status: "done" }, "company-1");
+
+    const state = await harness.getData<MicronautMergeUpState>(MICRONAUT_MERGE_UP_STATE_DATA_KEY, {
+      companyId: "company-1",
+      projectId: "project-1"
+    });
+
+    expect(state.issues).toEqual([
+      expect.objectContaining({
+        issueId: result.issue.issueId,
+        pullRequestUrl: "https://github.com/micronaut-projects/micronaut-test-resources/pull/654"
+      })
+    ]);
+  });
+
+  it("falls back to the Paperclip issue comments API when SDK comments do not include the PR link", async () => {
+    vi.stubEnv("PAPERCLIP_API_URL", "http://127.0.0.1:3100");
+
+    const harness = createTestHarness({
+      manifest,
+      capabilities: [...manifest.capabilities]
+    });
+    harness.seed({
+      projects: [createProject("https://github.com/micronaut-projects/micronaut-test-resources")],
+      agents: [createAgent("agent-merge", { name: "Merge Bot" })]
+    });
+
+    await plugin.definition.setup(harness.ctx);
+
+    const result = await harness.performAction<MicronautStartMergeUpResult>(
+      MICRONAUT_START_MERGE_UP_ACTION_KEY,
+      {
+        companyId: "company-1",
+        projectId: "project-1",
+        targetBranch: "4.1.x",
+        agentId: "agent-merge"
+      }
+    );
+
+    vi.spyOn(harness.ctx.issues, "listComments").mockResolvedValue([]);
+    const fetchMock = global.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === `http://127.0.0.1:3100/api/issues/${encodeURIComponent(result.issue.issueIdentifier)}/comments`) {
+        return jsonResponse([
+          {
+            id: "comment-3",
+            body: "Ready for review: https://github.com/micronaut-projects/micronaut-test-resources/pull/777",
+            createdAt: "2026-04-15T08:45:00.000Z",
+            updatedAt: "2026-04-15T08:45:00.000Z"
+          }
+        ]);
+      }
+
+      return new Response("Not found", { status: 404 });
+    });
+    await harness.ctx.issues.update(result.issue.issueId, { status: "done" }, "company-1");
+
+    const state = await harness.getData<MicronautMergeUpState>(MICRONAUT_MERGE_UP_STATE_DATA_KEY, {
+      companyId: "company-1",
+      projectId: "project-1"
+    });
+
+    expect(state.issues).toEqual([
+      expect.objectContaining({
+        issueId: result.issue.issueId,
+        pullRequestUrl: "https://github.com/micronaut-projects/micronaut-test-resources/pull/777"
+      })
+    ]);
+  });
+
+  it("returns already_exists when a merge-up issue is already open for the target branch", async () => {
+    const harness = createTestHarness({
+      manifest,
+      capabilities: [...manifest.capabilities]
+    });
+    harness.seed({
+      projects: [createProject("https://github.com/micronaut-projects/micronaut-test-resources")],
+      agents: [createAgent("agent-merge", { name: "Merge Bot" })]
+    });
+    const createIssueSpy = vi.spyOn(harness.ctx.issues, "create");
+
+    await plugin.definition.setup(harness.ctx);
+
+    const first = await harness.performAction<MicronautStartMergeUpResult>(
+      MICRONAUT_START_MERGE_UP_ACTION_KEY,
+      {
+        companyId: "company-1",
+        projectId: "project-1",
+        targetBranch: "4.1.x",
+        agentId: "agent-merge"
+      }
+    );
+    const second = await harness.performAction<MicronautStartMergeUpResult>(
+      MICRONAUT_START_MERGE_UP_ACTION_KEY,
+      {
+        companyId: "company-1",
+        projectId: "project-1",
+        targetBranch: "4.1.x"
+      }
+    );
+
+    expect(first.status).toBe("created");
+    expect(createIssueSpy).toHaveBeenCalledTimes(1);
+    expect(second).toEqual({
+      status: "already_exists",
+      issue: expect.objectContaining({
+        issueId: first.issue.issueId,
+        targetBranch: "4.1.x",
+        sourceBranch: "4.0.x",
+        issueTitle: "Merge up 4.0.x into 4.1.x",
+        agentUrlKey: "agent-merge",
+        status: "todo"
+      })
+    });
   });
 
   it("returns unsupported for non-Micronaut repositories", async () => {

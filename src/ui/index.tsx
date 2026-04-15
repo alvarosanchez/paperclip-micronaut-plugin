@@ -1,29 +1,73 @@
-import { useEffect, useState, type ReactElement, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import type { PluginDetailTabProps } from "@paperclipai/plugin-sdk/ui";
 import { usePluginAction, usePluginData, usePluginToast } from "@paperclipai/plugin-sdk/ui";
 import {
+  Atom,
+  Bot,
+  Brain,
+  Bug,
+  CircuitBoard,
+  Code,
+  Cog,
+  Cpu,
+  Crown,
+  Database,
+  Eye,
+  FileCode,
+  Fingerprint,
+  Flame,
+  Gem,
+  GitBranch,
+  Globe,
+  Hammer,
+  Heart,
+  Hexagon,
+  Lightbulb,
+  Lock,
+  Mail,
+  MessageSquare,
+  Microscope,
+  Package,
+  Pentagon,
+  Puzzle,
+  Radar,
+  Rocket,
+  Search,
+  Shield,
+  Sparkles,
+  Star,
+  Swords,
+  Target,
+  Telescope,
+  Terminal,
+  Wand2,
+  Wrench,
+  Zap,
+  type LucideIcon
+} from "lucide-react";
+import {
   MICRONAUT_CREATE_BRANCH_ACTION_KEY,
+  MICRONAUT_MERGE_UP_STATE_DATA_KEY,
   MICRONAUT_PROJECT_OVERVIEW_DATA_KEY,
   MICRONAUT_REFRESH_PROJECT_OVERVIEW_ACTION_KEY,
+  MICRONAUT_START_MERGE_UP_ACTION_KEY,
   type MicronautCreateBranchResult,
+  type MicronautMergeUpAgentOption,
+  type MicronautMergeUpIssue,
+  type MicronautMergeUpState,
+  type MicronautStartMergeUpResult,
   type MicronautProjectBranch,
   type MicronautProjectOverview
 } from "../micronaut.js";
 
-const MICRONAUT_TAB_LABEL = "Micronaut";
-const MICRONAUT_SYMBOL_SVG = [
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">',
-  '<defs><linearGradient id="micronaut-gradient" x1="12" y1="10" x2="52" y2="54" gradientUnits="userSpaceOnUse">',
-  '<stop offset="0%" stop-color="#62d8ff"/>',
-  '<stop offset="100%" stop-color="#0f74ff"/>',
-  "</linearGradient></defs>",
-  '<path fill="url(#micronaut-gradient)" d="M32 4 54 17v30L32 60 10 47V17Z"/>',
-  '<path fill="#fff" d="M18 44V20h7l7 10 7-10h7v24h-7V31l-7 10-7-10v13Z"/>',
-  "</svg>"
-].join("");
-const MICRONAUT_SYMBOL_URL = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(
-  MICRONAUT_SYMBOL_SVG
-)}`;
+type MicronautThemeMode = "dark" | "light";
+type LegacyMediaQueryList = MediaQueryList & {
+  addListener?: (listener: (event: MediaQueryListEvent) => void) => void;
+  removeListener?: (listener: (event: MediaQueryListEvent) => void) => void;
+};
+
+const MICRONAUT_THEME_ATTRIBUTE_NAMES = ["data-theme", "data-color-scheme", "data-mode"] as const;
 
 const RELATIVE_TIME_FORMATTER = new Intl.RelativeTimeFormat("en", {
   numeric: "always"
@@ -54,6 +98,50 @@ const HOST_ICON_BUTTON_SIZE_CLASSNAME = "h-8 w-8 px-0";
 
 type PluginActionButtonSize = "icon" | "sm";
 
+const AGENT_ICONS: Record<string, LucideIcon> = {
+  atom: Atom,
+  bot: Bot,
+  brain: Brain,
+  bug: Bug,
+  cog: Cog,
+  code: Code,
+  cpu: Cpu,
+  crown: Crown,
+  database: Database,
+  eye: Eye,
+  fingerprint: Fingerprint,
+  flame: Flame,
+  gem: Gem,
+  globe: Globe,
+  hammer: Hammer,
+  heart: Heart,
+  hexagon: Hexagon,
+  lightbulb: Lightbulb,
+  lock: Lock,
+  mail: Mail,
+  microscope: Microscope,
+  package: Package,
+  pentagon: Pentagon,
+  puzzle: Puzzle,
+  radar: Radar,
+  rocket: Rocket,
+  search: Search,
+  shield: Shield,
+  sparkles: Sparkles,
+  star: Star,
+  swords: Swords,
+  target: Target,
+  telescope: Telescope,
+  terminal: Terminal,
+  wrench: Wrench,
+  zap: Zap,
+  "circuit-board": CircuitBoard,
+  "file-code": FileCode,
+  "git-branch": GitBranch,
+  "message-square": MessageSquare,
+  wand: Wand2
+};
+
 function getPluginActionClassName(options?: {
   extraClassName?: string;
   size?: PluginActionButtonSize;
@@ -76,41 +164,82 @@ function getPluginActionClassName(options?: {
 
 const STYLES = `
 .micronaut-project-tab {
+  --micronaut-border: rgba(15, 23, 42, 0.12);
+  --micronaut-border-strong: rgba(15, 23, 42, 0.18);
+  --micronaut-surface: rgba(255, 255, 255, 0.92);
+  --micronaut-surface-strong: rgba(244, 247, 252, 0.98);
+  --micronaut-brand-bg:
+    linear-gradient(135deg, rgba(8, 145, 178, 0.16), rgba(249, 115, 22, 0.12));
+  --micronaut-brand-border: rgba(8, 145, 178, 0.22);
+  --micronaut-text-strong: #0f172a;
+  --micronaut-text-muted: rgba(15, 23, 42, 0.78);
+  --micronaut-text-subtle: rgba(15, 23, 42, 0.58);
+  --micronaut-link: #0f766e;
+  --micronaut-default-bg: rgba(8, 145, 178, 0.12);
+  --micronaut-default-border: rgba(8, 145, 178, 0.22);
+  --micronaut-default-text: #0f766e;
+  --micronaut-success-bg: rgba(22, 163, 74, 0.12);
+  --micronaut-success-border: rgba(22, 163, 74, 0.2);
+  --micronaut-success-text: #166534;
+  --micronaut-info-bg: rgba(37, 99, 235, 0.1);
+  --micronaut-info-border: rgba(37, 99, 235, 0.18);
+  --micronaut-info-text: #1d4ed8;
+  --micronaut-warning-bg: rgba(245, 158, 11, 0.12);
+  --micronaut-warning-border: rgba(245, 158, 11, 0.2);
+  --micronaut-warning-text: #b45309;
+  --micronaut-danger-bg: rgba(239, 68, 68, 0.11);
+  --micronaut-danger-border: rgba(239, 68, 68, 0.19);
+  --micronaut-danger-text: #b91c1c;
+  --micronaut-notice-bg: rgba(255, 247, 237, 0.96);
+  --micronaut-notice-border: rgba(249, 115, 22, 0.22);
+  --micronaut-notice-text: #9a3412;
+  --micronaut-panel-shadow: 0 18px 40px rgba(15, 23, 42, 0.06);
+  --micronaut-modal-backdrop: rgba(15, 23, 42, 0.2);
+  --micronaut-modal-bg: rgba(255, 255, 255, 0.98);
+  --micronaut-modal-shadow: 0 24px 72px rgba(15, 23, 42, 0.18);
+  color: var(--micronaut-text-strong);
+  color-scheme: light;
+  display: grid;
+  gap: 16px;
+  max-width: 920px;
+  width: 100%;
+}
+
+.micronaut-project-tab[data-theme-mode="dark"] {
   --micronaut-border: rgba(148, 163, 184, 0.18);
-  --micronaut-border: color-mix(in srgb, currentColor 14%, transparent);
   --micronaut-border-strong: rgba(148, 163, 184, 0.28);
-  --micronaut-border-strong: color-mix(in srgb, currentColor 20%, transparent);
-  --micronaut-surface: rgba(15, 23, 42, 0.26);
-  --micronaut-surface: color-mix(in srgb, currentColor 4%, transparent);
-  --micronaut-surface-strong: rgba(15, 23, 42, 0.36);
-  --micronaut-surface-strong: color-mix(in srgb, currentColor 6%, transparent);
+  --micronaut-surface: rgba(15, 23, 42, 0.58);
+  --micronaut-surface-strong: rgba(15, 23, 42, 0.82);
+  --micronaut-brand-bg:
+    linear-gradient(135deg, rgba(8, 145, 178, 0.26), rgba(249, 115, 22, 0.16));
+  --micronaut-brand-border: rgba(103, 232, 249, 0.22);
   --micronaut-text-strong: rgba(248, 250, 252, 0.96);
-  --micronaut-text-muted: rgba(226, 232, 240, 0.78);
-  --micronaut-text-subtle: rgba(226, 232, 240, 0.56);
+  --micronaut-text-muted: rgba(226, 232, 240, 0.82);
+  --micronaut-text-subtle: rgba(226, 232, 240, 0.58);
   --micronaut-link: #67e8f9;
-  --micronaut-default-bg: rgba(45, 212, 191, 0.14);
+  --micronaut-default-bg: rgba(45, 212, 191, 0.16);
   --micronaut-default-border: rgba(45, 212, 191, 0.28);
   --micronaut-default-text: #99f6e4;
   --micronaut-success-bg: rgba(34, 197, 94, 0.14);
   --micronaut-success-border: rgba(34, 197, 94, 0.28);
   --micronaut-success-text: #86efac;
-  --micronaut-info-bg: rgba(96, 165, 250, 0.14);
-  --micronaut-info-border: rgba(96, 165, 250, 0.28);
-  --micronaut-info-text: #93c5fd;
-  --micronaut-warning-bg: rgba(245, 158, 11, 0.14);
-  --micronaut-warning-border: rgba(245, 158, 11, 0.28);
+  --micronaut-info-bg: rgba(96, 165, 250, 0.15);
+  --micronaut-info-border: rgba(96, 165, 250, 0.3);
+  --micronaut-info-text: #bfdbfe;
+  --micronaut-warning-bg: rgba(245, 158, 11, 0.16);
+  --micronaut-warning-border: rgba(245, 158, 11, 0.32);
   --micronaut-warning-text: #fdba74;
-  --micronaut-danger-bg: rgba(239, 68, 68, 0.14);
-  --micronaut-danger-border: rgba(239, 68, 68, 0.28);
+  --micronaut-danger-bg: rgba(239, 68, 68, 0.16);
+  --micronaut-danger-border: rgba(239, 68, 68, 0.32);
   --micronaut-danger-text: #fca5a5;
-  --micronaut-notice-bg: rgba(146, 64, 14, 0.12);
+  --micronaut-notice-bg: rgba(120, 53, 15, 0.28);
   --micronaut-notice-border: rgba(251, 191, 36, 0.24);
   --micronaut-notice-text: #fcd34d;
-  color: inherit;
-  display: grid;
-  gap: 16px;
-  max-width: 920px;
-  width: 100%;
+  --micronaut-panel-shadow: 0 22px 48px rgba(2, 6, 23, 0.32);
+  --micronaut-modal-backdrop: rgba(2, 6, 23, 0.72);
+  --micronaut-modal-bg: rgba(15, 23, 42, 0.96);
+  --micronaut-modal-shadow: 0 24px 80px rgba(2, 6, 23, 0.45);
+  color-scheme: dark;
 }
 
 .micronaut-project-tab,
@@ -154,24 +283,6 @@ const STYLES = `
   line-height: 1.4;
   margin: 0;
   text-align: right;
-}
-
-.micronaut-project-tab__brand {
-  align-items: center;
-  background: var(--micronaut-surface);
-  border: 1px solid var(--micronaut-border);
-  border-radius: 10px;
-  display: inline-flex;
-  flex: none;
-  height: 32px;
-  justify-content: center;
-  width: 32px;
-}
-
-.micronaut-project-tab__brand img {
-  display: block;
-  height: 18px;
-  width: 18px;
 }
 
 .micronaut-project-tab__eyebrow {
@@ -321,6 +432,7 @@ const STYLES = `
   background: var(--micronaut-surface);
   border: 1px solid var(--micronaut-border);
   border-radius: 12px;
+  box-shadow: var(--micronaut-panel-shadow);
   overflow: hidden;
 }
 
@@ -451,6 +563,15 @@ const STYLES = `
   color: var(--micronaut-text-subtle);
 }
 
+.micronaut-project-tab__branch-supporting {
+  color: var(--micronaut-text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
 .micronaut-project-tab__status-list {
   display: flex;
   flex-wrap: wrap;
@@ -505,6 +626,7 @@ const STYLES = `
   background: var(--micronaut-notice-bg);
   border: 1px solid var(--micronaut-notice-border);
   border-radius: 12px;
+  box-shadow: var(--micronaut-panel-shadow);
   color: var(--micronaut-notice-text);
   display: grid;
   gap: 8px;
@@ -529,6 +651,7 @@ const STYLES = `
   background: var(--micronaut-surface);
   border: 1px solid var(--micronaut-border);
   border-radius: 12px;
+  box-shadow: var(--micronaut-panel-shadow);
   display: grid;
   gap: 8px;
   padding: 14px;
@@ -550,6 +673,221 @@ const STYLES = `
   max-width: 70ch;
 }
 
+.micronaut-project-tab__modal-backdrop {
+  align-items: center;
+  backdrop-filter: blur(10px);
+  background: var(--micronaut-modal-backdrop);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 20px;
+  position: fixed;
+  z-index: 1000;
+}
+
+.micronaut-project-tab__modal {
+  background: var(--micronaut-modal-bg);
+  border: 1px solid var(--micronaut-border-strong);
+  border-radius: 16px;
+  box-shadow: var(--micronaut-modal-shadow);
+  display: grid;
+  gap: 14px;
+  max-height: min(720px, calc(100vh - 40px));
+  max-width: min(680px, calc(100vw - 40px));
+  overflow: auto;
+  padding: 18px;
+  width: 100%;
+}
+
+.micronaut-project-tab__modal-header {
+  display: grid;
+  gap: 6px;
+}
+
+.micronaut-project-tab__modal-title {
+  color: var(--micronaut-text-strong);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.micronaut-project-tab__modal-body {
+  display: grid;
+  gap: 14px;
+}
+
+.micronaut-project-tab__modal-copy {
+  color: var(--micronaut-text-muted);
+  font-size: 0.85rem;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.micronaut-project-tab__modal-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.micronaut-project-tab__modal-list li {
+  color: var(--micronaut-text-muted);
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.micronaut-project-tab__modal-card {
+  background: var(--micronaut-surface);
+  border: 1px solid var(--micronaut-border);
+  border-radius: 12px;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+
+.micronaut-project-tab__modal-card-title {
+  color: var(--micronaut-text-strong);
+  font-size: 0.84rem;
+  font-weight: 600;
+  line-height: 1.4;
+  margin: 0;
+}
+
+.micronaut-project-tab__modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.micronaut-project-tab__merge-up-picker-anchor {
+  position: relative;
+}
+
+.micronaut-project-tab__merge-up-popover {
+  background: var(--background, var(--micronaut-modal-bg));
+  border: 1px solid var(--border, var(--micronaut-border-strong));
+  border-radius: 12px;
+  box-shadow: 0 16px 38px rgba(15, 23, 42, 0.22);
+  min-width: min(280px, calc(100vw - 48px));
+  padding: 6px;
+  position: fixed;
+  width: 280px;
+  z-index: 1100;
+}
+
+.micronaut-project-tab__merge-up-issue-link {
+  align-items: center;
+  background: var(--micronaut-surface);
+  border: 1px solid var(--micronaut-border);
+  border-radius: 999px;
+  color: var(--micronaut-text-muted);
+  display: inline-flex;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 10px;
+  text-decoration: none;
+}
+
+.micronaut-project-tab__merge-up-issue-link:hover {
+  background: var(--micronaut-surface-strong);
+  border-color: var(--micronaut-border-strong);
+  color: var(--micronaut-text-strong);
+}
+
+.micronaut-project-tab__merge-up-issue-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.micronaut-project-tab__merge-up-pr-link {
+  align-items: center;
+  background: color-mix(in srgb, var(--micronaut-info-bg) 88%, transparent);
+  border: 1px solid var(--micronaut-info-border);
+  border-radius: 999px;
+  color: var(--micronaut-info-text);
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 700;
+  min-height: 32px;
+  padding: 0 10px;
+  text-decoration: none;
+}
+
+.micronaut-project-tab__merge-up-pr-link:hover {
+  border-color: color-mix(in srgb, var(--micronaut-info-border) 76%, currentColor);
+  color: var(--micronaut-text-strong);
+}
+
+.micronaut-project-tab__issue-status-icon {
+  align-items: center;
+  border: 2px solid currentColor;
+  border-radius: 999px;
+  display: inline-flex;
+  flex: none;
+  height: 14px;
+  justify-content: center;
+  width: 14px;
+}
+
+.micronaut-project-tab__issue-status-icon--backlog {
+  color: var(--micronaut-text-subtle);
+}
+
+.micronaut-project-tab__issue-status-icon--todo {
+  color: #2563eb;
+}
+
+.micronaut-project-tab[data-theme-mode="dark"] .micronaut-project-tab__issue-status-icon--todo {
+  color: #60a5fa;
+}
+
+.micronaut-project-tab__issue-status-icon--in_progress {
+  color: #ca8a04;
+}
+
+.micronaut-project-tab[data-theme-mode="dark"] .micronaut-project-tab__issue-status-icon--in_progress {
+  color: #facc15;
+}
+
+.micronaut-project-tab__issue-status-icon--in_review {
+  color: #7c3aed;
+}
+
+.micronaut-project-tab[data-theme-mode="dark"] .micronaut-project-tab__issue-status-icon--in_review {
+  color: #a78bfa;
+}
+
+.micronaut-project-tab__issue-status-icon--done {
+  color: #16a34a;
+}
+
+.micronaut-project-tab[data-theme-mode="dark"] .micronaut-project-tab__issue-status-icon--done {
+  color: #4ade80;
+}
+
+.micronaut-project-tab__issue-status-icon--cancelled {
+  color: #737373;
+}
+
+.micronaut-project-tab__issue-status-icon--blocked {
+  color: #dc2626;
+}
+
+.micronaut-project-tab[data-theme-mode="dark"] .micronaut-project-tab__issue-status-icon--blocked {
+  color: #f87171;
+}
+
+.micronaut-project-tab__issue-status-icon-dot {
+  background: currentColor;
+  border-radius: 999px;
+  display: block;
+  height: 6px;
+  width: 6px;
+}
+
 @keyframes micronaut-project-tab-spin {
   to {
     transform: rotate(360deg);
@@ -569,6 +907,11 @@ const STYLES = `
     text-align: left;
   }
 
+  .micronaut-project-tab__brand {
+    min-width: 0;
+    padding: 0 10px;
+  }
+
   .micronaut-project-tab__row--version,
   .micronaut-project-tab__row--branch {
     grid-template-columns: minmax(0, 1fr);
@@ -576,6 +919,13 @@ const STYLES = `
 
   .micronaut-project-tab__status-list {
     justify-content: flex-start;
+  }
+
+  .micronaut-project-tab__merge-up-popover {
+    left: 0;
+    min-width: 0;
+    right: auto;
+    width: min(320px, calc(100vw - 48px));
   }
 }
 `;
@@ -587,26 +937,163 @@ interface StatusPill {
   tone: StatusPillTone;
 }
 
-interface MicronautTabIconObserverState {
-  bootstrapScheduled?: boolean;
-  documentObserver?: MutationObserver;
-  historyPatched?: boolean;
-  observedTablist?: HTMLElement | null;
-  tablistObserver?: MutationObserver;
+function normalizeThemeToken(value: string | null | undefined): string {
+  return value?.trim().toLowerCase() ?? "";
 }
 
-function normalizeTextContent(value: string | null | undefined): string {
-  return value?.replace(/\s+/g, " ").trim() ?? "";
+function parseMicronautThemeMode(value: string | null | undefined): MicronautThemeMode | null {
+  const normalized = normalizeThemeToken(value);
+  if (!normalized) {
+    return null;
+  }
+
+  if (/(^|[\s:_-])dark($|[\s:_-])/.test(normalized)) {
+    return "dark";
+  }
+
+  if (/(^|[\s:_-])light($|[\s:_-])/.test(normalized)) {
+    return "light";
+  }
+
+  return null;
 }
 
-function applyMicronautTabIconStyles(icon: HTMLImageElement): void {
-  icon.style.display = "inline-block";
-  icon.style.flex = "none";
-  icon.style.height = "14px";
-  icon.style.marginInlineEnd = "6px";
-  icon.style.objectFit = "contain";
-  icon.style.verticalAlign = "text-bottom";
-  icon.style.width = "14px";
+function parseCssRgb(value: string | null | undefined): { b: number; g: number; r: number } | null {
+  if (!value) {
+    return null;
+  }
+
+  const match = value.match(
+    /rgba?\(\s*(?<r>\d{1,3})\s*,\s*(?<g>\d{1,3})\s*,\s*(?<b>\d{1,3})(?:\s*,\s*[\d.]+)?\s*\)/i
+  );
+  if (!match?.groups) {
+    return null;
+  }
+
+  const r = Number.parseInt(match.groups.r, 10);
+  const g = Number.parseInt(match.groups.g, 10);
+  const b = Number.parseInt(match.groups.b, 10);
+  if ([r, g, b].some((channel) => !Number.isFinite(channel))) {
+    return null;
+  }
+
+  return { r, g, b };
+}
+
+function getRelativeLuminance(color: { b: number; g: number; r: number }): number {
+  const channels = [color.r, color.g, color.b].map((channel) => {
+    const normalized = channel / 255;
+    return normalized <= 0.03928
+      ? normalized / 12.92
+      : ((normalized + 0.055) / 1.055) ** 2.4;
+  });
+
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+}
+
+function getThemeModeFromElement(element: Element | null | undefined): MicronautThemeMode | null {
+  if (!(element instanceof HTMLElement)) {
+    return null;
+  }
+
+  for (const attributeName of MICRONAUT_THEME_ATTRIBUTE_NAMES) {
+    const themeMode = parseMicronautThemeMode(element.getAttribute(attributeName));
+    if (themeMode) {
+      return themeMode;
+    }
+  }
+
+  const themeMode = parseMicronautThemeMode(element.className);
+  if (themeMode) {
+    return themeMode;
+  }
+
+  const colorScheme = normalizeThemeToken(window.getComputedStyle(element).colorScheme);
+  if (colorScheme === "dark" || colorScheme === "light") {
+    return colorScheme;
+  }
+
+  return null;
+}
+
+function resolveMicronautThemeMode(): MicronautThemeMode {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return "light";
+  }
+
+  const explicitTheme =
+    getThemeModeFromElement(document.documentElement) ?? getThemeModeFromElement(document.body);
+  if (explicitTheme) {
+    return explicitTheme;
+  }
+
+  const backgroundColor =
+    parseCssRgb(window.getComputedStyle(document.body ?? document.documentElement).backgroundColor) ??
+    parseCssRgb(window.getComputedStyle(document.documentElement).backgroundColor);
+  if (backgroundColor) {
+    return getRelativeLuminance(backgroundColor) < 0.34 ? "dark" : "light";
+  }
+
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function useMicronautThemeMode(): MicronautThemeMode {
+  const [themeMode, setThemeMode] = useState<MicronautThemeMode>(() => resolveMicronautThemeMode());
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof document === "undefined") {
+      return;
+    }
+
+    const updateThemeMode = () => {
+      setThemeMode(resolveMicronautThemeMode());
+    };
+    updateThemeMode();
+
+    const observer = new MutationObserver(() => {
+      updateThemeMode();
+    });
+    const observerOptions = {
+      attributes: true,
+      attributeFilter: ["class", "style", ...MICRONAUT_THEME_ATTRIBUTE_NAMES]
+    };
+
+    observer.observe(document.documentElement, observerOptions);
+    if (document.body) {
+      observer.observe(document.body, observerOptions);
+    }
+
+    const mediaQuery =
+      typeof window.matchMedia === "function"
+        ? (window.matchMedia("(prefers-color-scheme: dark)") as LegacyMediaQueryList)
+        : null;
+    const handleChange = (_event: MediaQueryListEvent) => {
+      updateThemeMode();
+    };
+
+    if (mediaQuery) {
+      if (typeof mediaQuery.addEventListener === "function") {
+        mediaQuery.addEventListener("change", handleChange);
+      } else {
+        mediaQuery.addListener?.(handleChange);
+      }
+    }
+
+    return () => {
+      observer.disconnect();
+      if (!mediaQuery) {
+        return;
+      }
+
+      if (typeof mediaQuery.removeEventListener === "function") {
+        mediaQuery.removeEventListener("change", handleChange);
+      } else {
+        mediaQuery.removeListener?.(handleChange);
+      }
+    };
+  }, []);
+
+  return themeMode;
 }
 
 function getErrorMessage(
@@ -678,6 +1165,25 @@ function ExternalLinkIcon(): ReactElement {
   );
 }
 
+function SparkleIcon(): ReactElement {
+  return (
+    <IconBase>
+      <path d="m8 2 .9 2.1L11 5l-2.1.9L8 8l-.9-2.1L5 5l2.1-.9Z" />
+      <path d="m12.5 9 .45 1.05L14 10.5l-1.05.45L12.5 12l-.45-1.05L11 10.5l1.05-.45Z" />
+      <path d="m4 9 .6 1.4L6 11l-1.4.6L4 13l-.6-1.4L2 11l1.4-.6Z" />
+    </IconBase>
+  );
+}
+
+function FlagIcon(): ReactElement {
+  return (
+    <IconBase>
+      <path d="M4 13V3.25" />
+      <path d="M4 3.75h6.25l-.85 1.95.85 1.95H4" />
+    </IconBase>
+  );
+}
+
 function LoadingSpinner(): ReactElement {
   return <span aria-hidden="true" className="micronaut-project-tab__spinner" />;
 }
@@ -705,6 +1211,17 @@ function ButtonContent({
       {iconOnly ? <span className="micronaut-project-tab__sr-only">{spokenLabel}</span> : <span>{spokenLabel}</span>}
     </span>
   );
+}
+
+function AgentIcon({
+  className,
+  icon
+}: {
+  className?: string;
+  icon: string | null | undefined;
+}): ReactElement {
+  const Icon = AGENT_ICONS[icon ?? ""] ?? Bot;
+  return <Icon aria-hidden="true" className={className} strokeWidth={1.75} />;
 }
 
 function formatRelativeTime(value: string | null | undefined): string | null {
@@ -771,278 +1288,334 @@ function getLastCheckedMeta(value: string | null | undefined): {
   };
 }
 
-function isMicronautHostTab(candidate: Element): candidate is HTMLElement {
-  return (
-    candidate instanceof HTMLElement &&
-    candidate.getAttribute("role") === "tab" &&
-    normalizeTextContent(candidate.textContent) === MICRONAUT_TAB_LABEL
-  );
+interface SetDefaultDialogState {
+  kind: "setDefault";
+  branch: MicronautProjectBranch;
+  defaultBranchName: string | null;
 }
 
-function applyMicronautTabIconToTab(tab: HTMLElement): void {
-  tab.dataset.micronautTab = "true";
-  const existingIcon = tab.querySelector('[data-micronaut-tab-icon="true"]');
-  if (existingIcon instanceof HTMLImageElement) {
-    applyMicronautTabIconStyles(existingIcon);
-    return;
+interface BranchVersionSummary {
+  href: string | null;
+  linkLabel: string | null;
+  text: string;
+}
+
+function createEmptyMergeUpState(): MicronautMergeUpState {
+  return {
+    kind: "ready",
+    preferredAgentId: null,
+    preferredAgentName: null,
+    agents: [],
+    issues: []
+  };
+}
+
+function isMergeUpIssueClosed(issue: MicronautMergeUpIssue | null | undefined): boolean {
+  return issue?.status === "done" || issue?.status === "cancelled";
+}
+
+function isMergeUpIssueVisible(issue: MicronautMergeUpIssue | null | undefined): boolean {
+  return Boolean(issue) && !isMergeUpIssueClosed(issue);
+}
+
+function upsertMergeUpIssueList(
+  issues: MicronautMergeUpIssue[],
+  issue: MicronautMergeUpIssue
+): MicronautMergeUpIssue[] {
+  const nextIssues = issues.filter(
+    (candidate) =>
+      candidate.issueId !== issue.issueId && candidate.targetBranch !== issue.targetBranch
+  );
+
+  nextIssues.push(issue);
+  return nextIssues.sort((left, right) => {
+    const leftVisible = isMergeUpIssueVisible(left);
+    const rightVisible = isMergeUpIssueVisible(right);
+    if (leftVisible !== rightVisible) {
+      return leftVisible ? -1 : 1;
+    }
+
+    return Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
+  });
+}
+
+function mergeMergeUpState(
+  current: MicronautMergeUpState | null,
+  incoming: MicronautMergeUpState
+): MicronautMergeUpState {
+  if (!current?.issues.length) {
+    return incoming;
   }
 
-  const icon = document.createElement("img");
-  icon.src = MICRONAUT_SYMBOL_URL;
-  icon.alt = "";
-  icon.setAttribute("aria-hidden", "true");
-  icon.setAttribute("data-micronaut-tab-icon", "true");
-  applyMicronautTabIconStyles(icon);
-  tab.prepend(icon);
+  const currentIssueMap = new Map(current.issues.map((issue) => [issue.issueId, issue]));
+  return {
+    ...incoming,
+    issues: incoming.issues.map((issue) => {
+      const currentIssue = currentIssueMap.get(issue.issueId);
+      if (!currentIssue?.pullRequestUrl || issue.pullRequestUrl) {
+        return issue;
+      }
+
+      return {
+        ...issue,
+        pullRequestUrl: currentIssue.pullRequestUrl
+      };
+    })
+  };
 }
 
-function getMicronautTabIconObserverState(): MicronautTabIconObserverState | null {
+function getBranchMergeUpIssue(
+  mergeUpState: MicronautMergeUpState | null,
+  branchName: string | null
+): MicronautMergeUpIssue | null {
+  if (!mergeUpState || !branchName) {
+    return null;
+  }
+
+  return mergeUpState.issues.find((issue) => issue.targetBranch === branchName) ?? null;
+}
+
+function getMergeUpIssueStatusLabel(status: MicronautMergeUpIssue["status"]): string {
+  switch (status) {
+    case "in_progress":
+      return "In Progress";
+    case "in_review":
+      return "In Review";
+    default:
+      return status.replace(/_/g, " ").replace(/\b\w/g, (match) => match.toUpperCase());
+  }
+}
+
+function getMergeUpIssueHref(
+  issue: MicronautMergeUpIssue | null | undefined,
+  companyPrefix: string | null,
+  companyId: string | null
+): string | null {
+  if (!issue?.issueId) {
+    return null;
+  }
+
+  const issueRef = issue.issueIdentifier || issue.issueId;
+  const resolvedCompanyPrefix =
+    normalizeCompanyPrefix(companyPrefix) ?? resolveFallbackCompanyPrefix();
+  const companySegment = resolvedCompanyPrefix ? `/${encodeURIComponent(resolvedCompanyPrefix)}` : "";
+  const pathname = `${companySegment}/issues/${encodeURIComponent(issueRef)}`;
+  return buildHostHref(pathname, resolvedCompanyPrefix ? null : companyId);
+}
+
+function getPullRequestNumberFromUrl(url: string | null | undefined): string | null {
+  const match = /\/pull\/(\d+)(?:[/?#]|$)/.exec(url ?? "");
+  return match?.[1] ?? null;
+}
+
+function extractPullRequestUrl(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const match =
+    /https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+(?:[/?#][^\s)]*)?/i.exec(
+      value
+    );
+  return match?.[0] ?? null;
+}
+
+function getPullRequestLabel(url: string | null | undefined): string {
+  const pullRequestNumber = getPullRequestNumberFromUrl(url);
+  return pullRequestNumber ? `PR #${pullRequestNumber}` : "Open PR";
+}
+
+interface IssueCommentSummary {
+  body?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+function getIssueCommentTimestamp(comment: IssueCommentSummary): number {
+  const timestamp = comment.updatedAt ?? comment.createdAt ?? null;
+  if (!timestamp) {
+    return 0;
+  }
+
+  const parsed = Date.parse(timestamp);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+async function fetchIssuePullRequestUrl(issue: MicronautMergeUpIssue): Promise<string | null> {
   if (typeof window === "undefined") {
     return null;
   }
 
-  const windowWithState = window as Window & {
-    __paperclipMicronautTabIconObserverState?: MicronautTabIconObserverState;
-  };
-
-  if (!windowWithState.__paperclipMicronautTabIconObserverState) {
-    windowWithState.__paperclipMicronautTabIconObserverState = {};
+  const issueRef = issue.issueIdentifier ?? issue.issueId;
+  if (!issueRef) {
+    return null;
   }
 
-  return windowWithState.__paperclipMicronautTabIconObserverState;
-}
-
-function findMicronautTabs(root: ParentNode): HTMLElement[] {
-  const tabs: HTMLElement[] = [];
-
-  if (root instanceof Element && isMicronautHostTab(root)) {
-    tabs.push(root);
-  }
-
-  for (const candidate of Array.from(root.querySelectorAll('[role="tab"]'))) {
-    if (isMicronautHostTab(candidate)) {
-      tabs.push(candidate);
-    }
-  }
-
-  return tabs;
-}
-
-function applyMicronautTabIconsInRoot(root: ParentNode): HTMLElement[] {
-  const tabs = findMicronautTabs(root);
-  for (const tab of tabs) {
-    applyMicronautTabIconToTab(tab);
-  }
-
-  return tabs;
-}
-
-function getMicronautTablist(tab: HTMLElement): HTMLElement | null {
-  const closestTablist = tab.closest('[role="tablist"]');
-  if (closestTablist instanceof HTMLElement) {
-    return closestTablist;
-  }
-
-  return tab.parentElement;
-}
-
-function disconnectMicronautTabDocumentObserver(state: MicronautTabIconObserverState): void {
-  state.documentObserver?.disconnect();
-  state.documentObserver = undefined;
-}
-
-function disconnectMicronautTablistObserver(state: MicronautTabIconObserverState): void {
-  state.tablistObserver?.disconnect();
-  state.tablistObserver = undefined;
-  state.observedTablist = null;
-}
-
-function startMicronautTabDocumentObserver(): void {
-  if (typeof window === "undefined" || typeof document === "undefined") {
-    return;
-  }
-
-  const state = getMicronautTabIconObserverState();
-  if (!state) {
-    return;
-  }
-
-  const attachObserver = () => {
-    if (!document.body) {
-      window.requestAnimationFrame(attachObserver);
-      return;
-    }
-
-    if (state.documentObserver) {
-      const existingTabs = applyMicronautTabIconsInRoot(document);
-      if (existingTabs.length > 0) {
-        startMicronautTablistObserver(existingTabs[0]);
+  const response = await fetch(
+    new URL(`/api/issues/${encodeURIComponent(issueRef)}/comments`, window.location.origin).toString(),
+    {
+      headers: {
+        accept: "application/json"
       }
-      return;
     }
+  );
 
-    const existingTabs = applyMicronautTabIconsInRoot(document);
-    if (existingTabs.length > 0) {
-      startMicronautTablistObserver(existingTabs[0]);
-      return;
-    }
-
-    const observer = new MutationObserver((records) => {
-      for (const record of records) {
-        const scanRoots = new Set<ParentNode>();
-
-        if (record.target instanceof HTMLElement) {
-          const tablist = record.target.closest('[role="tablist"]');
-          if (tablist) {
-            scanRoots.add(tablist);
-          }
-        }
-
-        for (const node of Array.from(record.addedNodes)) {
-          if (!(node instanceof HTMLElement)) {
-            continue;
-          }
-
-          const tablist = node.closest('[role="tablist"]');
-          if (tablist) {
-            scanRoots.add(tablist);
-          } else {
-            scanRoots.add(node);
-          }
-        }
-
-        for (const scanRoot of scanRoots) {
-          const tabs = applyMicronautTabIconsInRoot(scanRoot);
-          if (tabs.length > 0) {
-            startMicronautTablistObserver(tabs[0]);
-            return;
-          }
-        }
-      }
-    });
-
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true
-    });
-    state.documentObserver = observer;
-  };
-
-  if (document.readyState === "loading") {
-    if (!state.bootstrapScheduled) {
-      state.bootstrapScheduled = true;
-      document.addEventListener(
-        "DOMContentLoaded",
-        () => {
-          state.bootstrapScheduled = false;
-          attachObserver();
-        },
-        { once: true }
-      );
-    }
-    return;
+  if (!response.ok) {
+    throw new Error(`Issue comments request failed with status ${response.status}`);
   }
 
-  attachObserver();
+  const comments = (await response.json()) as IssueCommentSummary[];
+  if (!Array.isArray(comments)) {
+    return null;
+  }
+
+  for (const comment of [...comments].sort(
+    (left, right) => getIssueCommentTimestamp(right) - getIssueCommentTimestamp(left)
+  )) {
+    const pullRequestUrl = extractPullRequestUrl(comment.body);
+    if (pullRequestUrl) {
+      return pullRequestUrl;
+    }
+  }
+
+  return null;
 }
 
-function startMicronautTablistObserver(tab: HTMLElement): void {
-  const state = getMicronautTabIconObserverState();
-  if (!state) {
-    return;
-  }
-
-  const tablist = getMicronautTablist(tab);
-  if (!tablist) {
-    return;
-  }
-
-  applyMicronautTabIconsInRoot(tablist);
-  disconnectMicronautTabDocumentObserver(state);
-
-  if (state.observedTablist === tablist && state.tablistObserver) {
-    return;
-  }
-
-  disconnectMicronautTablistObserver(state);
-
-  const observer = new MutationObserver((records) => {
-    if (!records.some((record) => record.addedNodes.length > 0 || record.removedNodes.length > 0)) {
-      return;
-    }
-
-    const tabs = applyMicronautTabIconsInRoot(tablist);
-    if (tabs.length === 0) {
-      disconnectMicronautTablistObserver(state);
-      startMicronautTabDocumentObserver();
-      return;
-    }
-
-    if (tabs[0] !== tab) {
-      startMicronautTablistObserver(tabs[0]);
-      return;
-    }
-  });
-
-  observer.observe(tablist, {
-    childList: true,
-    subtree: true
-  });
-  state.tablistObserver = observer;
-  state.observedTablist = tablist;
+function normalizeCompanyPrefix(value: string | null | undefined): string | null {
+  const normalized = value?.trim() ?? "";
+  return normalized ? normalized.replace(/^\/+|\/+$/g, "") : null;
 }
 
-function restartMicronautTabIconObservers(): void {
-  const state = getMicronautTabIconObserverState();
-  if (!state) {
-    return;
-  }
-
-  disconnectMicronautTablistObserver(state);
-  disconnectMicronautTabDocumentObserver(state);
-  startMicronautTabDocumentObserver();
-}
-
-function installMicronautTabIconHistoryHooks(): void {
+function resolveFallbackCompanyPrefix(): string | null {
   if (typeof window === "undefined") {
-    return;
+    return null;
   }
 
-  const state = getMicronautTabIconObserverState();
-  if (!state || state.historyPatched) {
-    return;
-  }
-
-  state.historyPatched = true;
-  const notify = () => {
-    restartMicronautTabIconObservers();
-  };
-
-  window.addEventListener("popstate", notify);
-  window.addEventListener("pageshow", notify);
-
-  const originalPushState = window.history.pushState.bind(window.history);
-  window.history.pushState = ((data, unused, url) => {
-    const result = originalPushState(data, unused, url);
-    notify();
-    return result;
-  }) as History["pushState"];
-
-  const originalReplaceState = window.history.replaceState.bind(window.history);
-  window.history.replaceState = ((data, unused, url) => {
-    const result = originalReplaceState(data, unused, url);
-    notify();
-    return result;
-  }) as History["replaceState"];
+  const match = /^\/([^/]+)\/(?:agents|projects|issues|goals|dashboard|inbox|work|settings)(?:\/|$)/i.exec(
+    window.location.pathname
+  );
+  return match?.[1]?.trim() || null;
 }
 
-function startMicronautTabIconObserver(): void {
-  if (typeof window === "undefined" || typeof document === "undefined") {
-    return;
+function buildHostHref(pathname: string, companyId: string | null = null): string {
+  const normalizedCompanyId = companyId?.trim() ?? "";
+
+  if (typeof window === "undefined") {
+    if (!normalizedCompanyId) {
+      return pathname;
+    }
+
+    const separator = pathname.includes("?") ? "&" : "?";
+    return `${pathname}${separator}companyId=${encodeURIComponent(normalizedCompanyId)}`;
   }
 
-  installMicronautTabIconHistoryHooks();
-  startMicronautTabDocumentObserver();
+  const url = new URL(pathname, window.location.origin);
+  if (normalizedCompanyId) {
+    url.searchParams.set("companyId", normalizedCompanyId);
+  }
+
+  return url.toString();
+}
+
+function formatCommitCount(value: number): string {
+  return `${value} ${value === 1 ? "commit" : "commits"}`;
+}
+
+function getBranchSyncSummary(branch: MicronautProjectBranch, defaultBranchName: string | null): string {
+  const referenceBranchName = defaultBranchName ?? "the current default branch";
+  if (branch.role === "default") {
+    return branch.name
+      ? `${branch.name} is the current default branch.`
+      : "The current default branch is temporarily unavailable.";
+  }
+
+  if (branch.exists === false) {
+    return branch.name
+      ? `${branch.name} has not been created yet.`
+      : "This upcoming release branch has not been created yet.";
+  }
+
+  if (typeof branch.behindBy === "number" && typeof branch.aheadBy === "number") {
+    if (branch.behindBy === 0 && branch.aheadBy === 0) {
+      return `${branch.name ?? "This branch"} is up to date with ${referenceBranchName}.`;
+    }
+
+    if (branch.behindBy === 0 && branch.aheadBy > 0) {
+      return `${branch.name ?? "This branch"} is ${formatCommitCount(branch.aheadBy)} ahead of ${referenceBranchName} and not behind it.`;
+    }
+
+    return `${branch.name ?? "This branch"} is ${formatCommitCount(branch.aheadBy)} ahead and ${formatCommitCount(branch.behindBy)} behind ${referenceBranchName}.`;
+  }
+
+  return `${branch.name ?? "This branch"} could not be compared with ${referenceBranchName} yet.`;
+}
+
+function getBranchVersionSummary(branch: MicronautProjectBranch): BranchVersionSummary {
+  if (branch.role === "default") {
+    if (branch.projectVersion) {
+      return {
+        href: branch.projectVersionUrl,
+        linkLabel: branch.projectVersionUrl ? "Open gradle.properties" : null,
+        text: `projectVersion is ${branch.projectVersion} on the default branch.`
+      };
+    }
+
+    return {
+      href: branch.projectVersionUrl,
+      linkLabel: branch.projectVersionUrl ? "Open gradle.properties" : null,
+      text: "projectVersion is unavailable on the default branch."
+    };
+  }
+
+  if (branch.exists === false) {
+    return {
+      href: null,
+      linkLabel: null,
+      text: branch.expectedProjectVersion
+        ? `When ${branch.name ?? "this branch"} is created, it should use projectVersion=${branch.expectedProjectVersion}.`
+        : "The expected projectVersion for this branch could not be derived yet."
+    };
+  }
+
+  if (branch.versionStatus === "aligned" && branch.projectVersion) {
+    return {
+      href: branch.projectVersionUrl,
+      linkLabel: branch.projectVersionUrl ? "Open gradle.properties" : null,
+      text: `projectVersion ${branch.projectVersion} already matches ${branch.name ?? "this branch"}.`
+    };
+  }
+
+  if (
+    branch.versionStatus === "behind" &&
+    branch.projectVersion &&
+    branch.expectedProjectVersion
+  ) {
+    return {
+      href: branch.projectVersionUrl,
+      linkLabel: branch.projectVersionUrl ? "Open gradle.properties" : null,
+      text: `projectVersion ${branch.projectVersion} is behind ${branch.name ?? "this branch"}; expected ${branch.expectedProjectVersion}.`
+    };
+  }
+
+  if (
+    branch.versionStatus === "unexpected" &&
+    branch.projectVersion &&
+    branch.expectedProjectVersion
+  ) {
+    return {
+      href: branch.projectVersionUrl,
+      linkLabel: branch.projectVersionUrl ? "Open gradle.properties" : null,
+      text: `projectVersion ${branch.projectVersion} differs from the expected ${branch.expectedProjectVersion}.`
+    };
+  }
+
+  return {
+    href: branch.projectVersionUrl,
+    linkLabel: branch.projectVersionUrl ? "Open gradle.properties" : null,
+    text: branch.expectedProjectVersion
+      ? `The branch should eventually use projectVersion=${branch.expectedProjectVersion}, but the current value could not be read.`
+      : "The current projectVersion could not be read."
+  };
 }
 
 function getBranchStatusPills(branch: MicronautProjectBranch): StatusPill[] {
@@ -1054,11 +1627,11 @@ function getBranchStatusPills(branch: MicronautProjectBranch): StatusPill[] {
     return branch.name ? [{ label: "Default", tone: "default" }] : [{ label: "Unavailable", tone: "warning" }];
   }
 
+  const pills: StatusPill[] = [];
   if (branch.syncStatus === "up_to_date" || (branch.aheadBy === 0 && branch.behindBy === 0)) {
-    return [{ label: "Up to date", tone: "success" }];
+    pills.push({ label: "Up to date", tone: "success" });
   }
 
-  const pills: StatusPill[] = [];
   if (typeof branch.aheadBy === "number" && branch.aheadBy > 0) {
     pills.push({
       label: `${branch.aheadBy} ahead`,
@@ -1073,7 +1646,27 @@ function getBranchStatusPills(branch: MicronautProjectBranch): StatusPill[] {
   }
 
   if (pills.length > 0) {
+    if (branch.versionStatus === "behind") {
+      pills.push({
+        label: "Needs version PR",
+        tone: "warning"
+      });
+    } else if (branch.versionStatus === "unexpected") {
+      pills.push({
+        label: "Version differs",
+        tone: "danger"
+      });
+    }
+
     return pills;
+  }
+
+  if (branch.versionStatus === "behind") {
+    return [{ label: "Needs version PR", tone: "warning" }];
+  }
+
+  if (branch.versionStatus === "unexpected") {
+    return [{ label: "Version differs", tone: "danger" }];
   }
 
   return [{ label: "Unavailable", tone: "warning" }];
@@ -1099,11 +1692,16 @@ function getBranchLastUpdatedLabel(branch: MicronautProjectBranch): {
 
 interface MicronautSurfaceProps {
   children: ReactNode;
+  themeMode: MicronautThemeMode;
 }
 
-function MicronautSurface({ children }: MicronautSurfaceProps): ReactElement {
+function MicronautSurface({ children, themeMode }: MicronautSurfaceProps): ReactElement {
   return (
-    <section className="micronaut-project-tab" data-testid="micronaut-project-overview">
+    <section
+      className="micronaut-project-tab"
+      data-testid="micronaut-project-overview"
+      data-theme-mode={themeMode}
+    >
       <style>{STYLES}</style>
       {children}
     </section>
@@ -1180,7 +1778,187 @@ interface BranchRowProps {
   defaultBranchName: string | null;
   disabled: boolean;
   isCreating: boolean;
+  isMergeUpBusy: boolean;
+  isMergeUpStateLoading: boolean;
+  isMergeUpPickerOpen: boolean;
+  mergeUpAgents: MicronautMergeUpAgentOption[];
+  mergeUpIssue: MicronautMergeUpIssue | null;
+  mergeUpIssueHref: string | null;
+  pendingAgentId: string | null;
+  preferredAgentId: string | null;
   onCreateBranch: (branch: MicronautProjectBranch) => void | Promise<void>;
+  onCloseMergeUpPicker: () => void;
+  onOpenSetDefaultPreview: (branch: MicronautProjectBranch) => void;
+  onOpenMergeUpPicker: (branch: MicronautProjectBranch) => void;
+  onSelectMergeUpAgent: (branch: MicronautProjectBranch, agentId: string) => void;
+}
+
+function shouldLetBrowserHandleClick(event: {
+  altKey: boolean;
+  button: number;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+}): boolean {
+  return event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey;
+}
+
+function MergeUpIssueStatusIcon({
+  status
+}: {
+  status: MicronautMergeUpIssue["status"];
+}): ReactElement {
+  return (
+    <span
+      aria-label={getMergeUpIssueStatusLabel(status)}
+      className={`micronaut-project-tab__issue-status-icon micronaut-project-tab__issue-status-icon--${status}`}
+      title={getMergeUpIssueStatusLabel(status)}
+    >
+      {status === "done" ? <span className="micronaut-project-tab__issue-status-icon-dot" /> : null}
+    </span>
+  );
+}
+
+interface MergeUpAgentPopoverProps {
+  anchorRect: DOMRect | null;
+  agents: MicronautMergeUpAgentOption[];
+  isLoadingState: boolean;
+  onClose: () => void;
+  onSelectAgent: (agentId: string) => void;
+  pendingAgentId: string | null;
+  preferredAgentId: string | null;
+}
+
+function MergeUpAgentPopover({
+  anchorRect,
+  agents,
+  isLoadingState,
+  onClose,
+  onSelectAgent,
+  pendingAgentId,
+  preferredAgentId
+}: MergeUpAgentPopoverProps): ReactElement {
+  const [search, setSearch] = useState("");
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    if (!anchorRect || typeof window === "undefined") {
+      setPosition(null);
+      return;
+    }
+
+    const popoverWidth = Math.min(280, window.innerWidth - 48);
+    setPosition({
+      left: Math.max(24, Math.min(anchorRect.right - popoverWidth, window.innerWidth - popoverWidth - 24)),
+      top: Math.min(anchorRect.bottom + 8, window.innerHeight - 24)
+    });
+  }, [anchorRect]);
+
+  useEffect(() => {
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        onClose();
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+
+    window.addEventListener("mousedown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("mousedown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onClose]);
+
+  const orderedAgents = useMemo(
+    () =>
+      [...agents].sort((left, right) => {
+        const leftPreferred = left.id === preferredAgentId;
+        const rightPreferred = right.id === preferredAgentId;
+        if (leftPreferred !== rightPreferred) {
+          return leftPreferred ? -1 : 1;
+        }
+
+        return left.name.localeCompare(right.name, "en", { sensitivity: "base" });
+      }),
+    [agents, preferredAgentId]
+  );
+  const normalizedSearch = search.trim().toLowerCase();
+  const filteredAgents = orderedAgents.filter((agent) => {
+    if (!normalizedSearch) {
+      return true;
+    }
+
+    return [agent.name, agent.title, agent.urlKey]
+      .filter((value): value is string => Boolean(value))
+      .some((value) => value.toLowerCase().includes(normalizedSearch));
+  });
+
+  if (typeof document === "undefined" || !position) {
+    return <></>;
+  }
+
+  return createPortal(
+    <div
+      className="micronaut-project-tab__merge-up-popover rounded-md border bg-popover text-popover-foreground shadow-md"
+      ref={rootRef}
+      role="dialog"
+      aria-label="Choose merge-up agent"
+      style={{
+        left: `${position.left}px`,
+        top: `${position.top}px`
+      }}
+    >
+      <input
+        aria-label="Search assignees"
+        autoFocus
+        className="w-full px-2 py-1.5 text-xs bg-transparent outline-none border-b border-border mb-1 placeholder:text-muted-foreground/50"
+        placeholder="Search assignees..."
+        ref={inputRef}
+        value={search}
+        onChange={(event) => {
+          setSearch(event.currentTarget.value);
+        }}
+      />
+      <div className="max-h-48 overflow-y-auto overscroll-contain">
+        {isLoadingState ? (
+          <p className="px-2 py-2 text-xs text-muted-foreground">Loading assignees...</p>
+        ) : filteredAgents.length > 0 ? (
+          filteredAgents.map((agent) => (
+            <button
+              aria-current={agent.id === preferredAgentId ? "true" : undefined}
+              className={`flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50 text-left${agent.id === preferredAgentId ? " bg-accent" : ""}`}
+              disabled={pendingAgentId !== null}
+              key={agent.id}
+              onClick={() => {
+                onSelectAgent(agent.id);
+              }}
+              type="button"
+            >
+              <AgentIcon
+                className="h-3 w-3 shrink-0 text-muted-foreground"
+                icon={agent.icon}
+              />
+              <span className="truncate">{agent.name}</span>
+            </button>
+          ))
+        ) : (
+          <p className="px-2 py-2 text-xs text-muted-foreground">No assignees found.</p>
+        )}
+      </div>
+    </div>,
+    document.body
+  );
 }
 
 function BranchRow({
@@ -1188,12 +1966,29 @@ function BranchRow({
   defaultBranchName,
   disabled,
   isCreating,
-  onCreateBranch
+  isMergeUpBusy,
+  isMergeUpStateLoading,
+  isMergeUpPickerOpen,
+  mergeUpAgents,
+  mergeUpIssue,
+  mergeUpIssueHref,
+  pendingAgentId,
+  preferredAgentId,
+  onCreateBranch,
+  onCloseMergeUpPicker,
+  onOpenSetDefaultPreview,
+  onOpenMergeUpPicker,
+  onSelectMergeUpAgent
 }: BranchRowProps): ReactElement {
+  const mergeUpButtonRef = useRef<HTMLButtonElement | null>(null);
   const displayName = branch.name ?? "Unavailable";
   const showCreateBranchButton = branch.exists === false && branch.role !== "default" && Boolean(branch.name);
+  const visibleMergeUpIssue = isMergeUpIssueVisible(mergeUpIssue) ? mergeUpIssue : null;
+  const showMergeUpButton = branch.canMergeUp && !visibleMergeUpIssue;
+  const showSetDefaultButton = branch.canSetDefault;
   const statusPills = getBranchStatusPills(branch);
   const lastUpdated = getBranchLastUpdatedLabel(branch);
+  const versionSummary = getBranchVersionSummary(branch);
   const isBranchLinkVisible = Boolean(branch.url) && branch.exists !== false;
   const compareLabel = defaultBranchName
     ? `Compare with ${defaultBranchName}`
@@ -1202,6 +1997,12 @@ function BranchRow({
   const createBranchTitle = branch.name
     ? `Create ${branch.name} from ${defaultBranchName ?? "the default branch"}`
     : "Create branch";
+  const mergeUpPullRequestUrl =
+    mergeUpIssue?.pullRequestUrl &&
+    (visibleMergeUpIssue !== null || branch.canMergeUp)
+      ? mergeUpIssue.pullRequestUrl
+      : null;
+  const mergeUpPullRequestLabel = getPullRequestLabel(mergeUpPullRequestUrl);
 
   return (
     <article
@@ -1247,6 +2048,20 @@ function BranchRow({
             </a>
           ) : null}
         </div>
+
+        <div className="micronaut-project-tab__branch-supporting">
+          <span>{versionSummary.text}</span>
+          {versionSummary.href && versionSummary.linkLabel ? (
+            <a
+              className="micronaut-project-tab__action-link"
+              href={versionSummary.href}
+              rel="noreferrer"
+              target="_blank"
+            >
+              {versionSummary.linkLabel}
+            </a>
+          ) : null}
+        </div>
       </div>
 
       <div className="micronaut-project-tab__status-list" data-testid={`branch-status-${branch.role}`}>
@@ -1271,6 +2086,105 @@ function BranchRow({
             />
           </button>
         ) : null}
+        {showMergeUpButton ? (
+          <div className="micronaut-project-tab__merge-up-picker-anchor">
+            <button
+              aria-expanded={isMergeUpPickerOpen ? "true" : undefined}
+              aria-haspopup="dialog"
+              aria-label={
+                branch.name ? `Choose an agent to merge into ${branch.name}` : "Choose merge-up agent"
+              }
+              className={getPluginActionClassName()}
+              data-testid={`branch-merge-up-${branch.role}`}
+              disabled={disabled || isMergeUpBusy}
+              ref={mergeUpButtonRef}
+              onClick={() => {
+                if (isMergeUpPickerOpen) {
+                  onCloseMergeUpPicker();
+                  return;
+                }
+
+                onOpenMergeUpPicker(branch);
+              }}
+              title={
+                branch.name && defaultBranchName
+                  ? `Ask an agent to merge ${defaultBranchName} into ${branch.name}`
+                  : "Choose merge-up agent"
+              }
+              type="button"
+            >
+              <ButtonContent
+                busy={isMergeUpBusy}
+                busyLabel="Creating..."
+                icon={<SparkleIcon />}
+                label="Merge up"
+              />
+            </button>
+            {isMergeUpPickerOpen ? (
+              <MergeUpAgentPopover
+                anchorRect={mergeUpButtonRef.current?.getBoundingClientRect() ?? null}
+                agents={mergeUpAgents}
+                isLoadingState={isMergeUpStateLoading}
+                onClose={onCloseMergeUpPicker}
+                onSelectAgent={(agentId) => {
+                  onSelectMergeUpAgent(branch, agentId);
+                }}
+                pendingAgentId={pendingAgentId}
+                preferredAgentId={preferredAgentId}
+              />
+            ) : null}
+          </div>
+        ) : null}
+        {visibleMergeUpIssue && mergeUpIssueHref ? (
+          <a
+            className="micronaut-project-tab__merge-up-issue-link"
+            data-testid={`branch-merge-up-issue-${branch.role}`}
+            href={mergeUpIssueHref}
+            title={visibleMergeUpIssue.issueTitle}
+            onClick={(event) => {
+              if (shouldLetBrowserHandleClick(event)) {
+                return;
+              }
+
+              event.preventDefault();
+              if (typeof window !== "undefined") {
+                window.location.assign(mergeUpIssueHref);
+              }
+            }}
+          >
+            <MergeUpIssueStatusIcon status={visibleMergeUpIssue.status} />
+            <span className="micronaut-project-tab__merge-up-issue-label">
+              {visibleMergeUpIssue.issueIdentifier}
+            </span>
+          </a>
+        ) : null}
+        {mergeUpPullRequestUrl ? (
+          <a
+            className="micronaut-project-tab__merge-up-pr-link"
+            data-testid={`branch-merge-up-pr-${branch.role}`}
+            href={mergeUpPullRequestUrl}
+            rel="noreferrer"
+            target="_blank"
+            title={mergeUpPullRequestUrl}
+          >
+            {mergeUpPullRequestLabel}
+          </a>
+        ) : null}
+        {showSetDefaultButton ? (
+          <button
+            aria-label={branch.name ? `Preview setting ${branch.name} as default` : "Preview set default"}
+            className={getPluginActionClassName()}
+            data-testid={`branch-set-default-${branch.role}`}
+            disabled={disabled}
+            onClick={() => {
+              onOpenSetDefaultPreview(branch);
+            }}
+            title={branch.name ? `Preview setting ${branch.name} as the default branch` : "Preview set default"}
+            type="button"
+          >
+            <ButtonContent icon={<FlagIcon />} label="Set default" />
+          </button>
+        ) : null}
         {statusPills.map((statusPill, index) => (
           <span
             className={`micronaut-project-tab__status-pill micronaut-project-tab__status-pill--${statusPill.tone}`}
@@ -1291,8 +2205,10 @@ interface StatePanelProps {
 }
 
 function StatePanel({ body, title }: StatePanelProps): ReactElement {
+  const themeMode = useMicronautThemeMode();
+
   return (
-    <MicronautSurface>
+    <MicronautSurface themeMode={themeMode}>
       <section className="micronaut-project-tab__state">
         <p className="micronaut-project-tab__eyebrow">Micronaut</p>
         <p className="micronaut-project-tab__state-title">{title}</p>
@@ -1302,15 +2218,101 @@ function StatePanel({ body, title }: StatePanelProps): ReactElement {
   );
 }
 
+interface SetDefaultPreviewDialogProps {
+  branch: MicronautProjectBranch;
+  defaultBranchName: string | null;
+  onClose: () => void;
+}
+
+function SetDefaultPreviewDialog({
+  branch,
+  defaultBranchName,
+  onClose
+}: SetDefaultPreviewDialogProps): ReactElement {
+  const branchName = branch.name ?? "this branch";
+  const sourceBranchName = defaultBranchName ?? "the current default branch";
+  const syncSummary = getBranchSyncSummary(branch, defaultBranchName);
+  const versionSummary = getBranchVersionSummary(branch);
+  const plannedSteps =
+    branch.versionStatus === "behind" && branch.projectVersion && branch.expectedProjectVersion
+      ? [
+          `Create a pull request that updates gradle.properties on ${branchName} from projectVersion=${branch.projectVersion} to projectVersion=${branch.expectedProjectVersion}.`,
+          `After that pull request merges, run gh on the Paperclip host to make ${branchName} the repository default branch instead of ${sourceBranchName}.`
+        ]
+      : branch.versionStatus === "unexpected" &&
+          branch.projectVersion &&
+          branch.expectedProjectVersion
+        ? [
+            `Review gradle.properties on ${branchName} because projectVersion=${branch.projectVersion} differs from the expected ${branch.expectedProjectVersion}.`,
+            `Once the branch state is validated, run gh on the Paperclip host to make ${branchName} the repository default branch instead of ${sourceBranchName}.`
+          ]
+        : [
+            `Run gh on the Paperclip host to make ${branchName} the repository default branch instead of ${sourceBranchName}.`
+          ];
+
+  return (
+    <div
+      aria-modal="true"
+      className="micronaut-project-tab__modal-backdrop"
+      onClick={onClose}
+      role="dialog"
+    >
+      <section
+        className="micronaut-project-tab__modal"
+        onClick={(event) => {
+          event.stopPropagation();
+        }}
+      >
+        <header className="micronaut-project-tab__modal-header">
+          <p className="micronaut-project-tab__eyebrow">Preview</p>
+          <h3 className="micronaut-project-tab__modal-title">
+            Set {branchName} as the default branch
+          </h3>
+          <p className="micronaut-project-tab__modal-copy">
+            This slice still keeps the default-branch switch as a preview so you can validate the
+            exact GitHub and versioning steps before we wire the real `gh` flow.
+          </p>
+        </header>
+
+        <div className="micronaut-project-tab__modal-body">
+          <section className="micronaut-project-tab__modal-card">
+            <h4 className="micronaut-project-tab__modal-card-title">Eligibility snapshot</h4>
+            <p className="micronaut-project-tab__modal-copy">{syncSummary}</p>
+            <p className="micronaut-project-tab__modal-copy">{versionSummary.text}</p>
+          </section>
+
+          <section className="micronaut-project-tab__modal-card">
+            <h4 className="micronaut-project-tab__modal-card-title">Planned steps</h4>
+            <ol className="micronaut-project-tab__modal-list">
+              {plannedSteps.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
+            </ol>
+          </section>
+        </div>
+
+        <div className="micronaut-project-tab__modal-actions">
+          <button className={getPluginActionClassName()} onClick={onClose} type="button">
+            Close preview
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 interface MicronautProjectDetailTabBodyProps {
   companyId: string;
+  companyPrefix: string | null;
   projectId: string;
 }
 
 function MicronautProjectDetailTabBody({
   companyId,
+  companyPrefix,
   projectId
 }: MicronautProjectDetailTabBodyProps): ReactElement | null {
+  const themeMode = useMicronautThemeMode();
   const overviewSnapshotCacheKey = getOverviewSnapshotCacheKey(companyId, projectId);
   const { data, error, loading } = usePluginData<MicronautProjectOverview>(
     MICRONAUT_PROJECT_OVERVIEW_DATA_KEY,
@@ -1319,16 +2321,53 @@ function MicronautProjectDetailTabBody({
       projectId
     }
   );
+  const {
+    data: mergeUpData,
+    loading: mergeUpLoading,
+    refresh: refreshMergeUpState
+  } = usePluginData<MicronautMergeUpState>(MICRONAUT_MERGE_UP_STATE_DATA_KEY, {
+    companyId,
+    projectId
+  });
   const refreshOverview = usePluginAction(MICRONAUT_REFRESH_PROJECT_OVERVIEW_ACTION_KEY);
   const createBranch = usePluginAction(MICRONAUT_CREATE_BRANCH_ACTION_KEY);
+  const startMergeUp = usePluginAction(MICRONAUT_START_MERGE_UP_ACTION_KEY);
   const toast = usePluginToast();
+  const mergeUpStatusRef = useRef(new Map<string, MicronautMergeUpIssue["status"]>());
+  const mergeUpHydratedRef = useRef(false);
+  const mergeUpPullRequestLookupRef = useRef(new Set<string>());
   const [displayedOverview, setDisplayedOverview] = useState<MicronautProjectOverview | null>(
     () => OVERVIEW_SNAPSHOT_CACHE.get(overviewSnapshotCacheKey) ?? null
+  );
+  const [displayedMergeUpState, setDisplayedMergeUpState] = useState<MicronautMergeUpState | null>(
+    null
   );
   const [isRefreshingOverview, setIsRefreshingOverview] = useState(false);
   const [pendingBranchRole, setPendingBranchRole] = useState<MicronautProjectBranch["role"] | null>(
     null
   );
+  const [activeDialog, setActiveDialog] = useState<SetDefaultDialogState | null>(null);
+  const [openMergeUpPickerBranchName, setOpenMergeUpPickerBranchName] = useState<string | null>(
+    null
+  );
+  const [pendingMergeUpTargetBranch, setPendingMergeUpTargetBranch] = useState<string | null>(null);
+  const [pendingMergeUpAgentId, setPendingMergeUpAgentId] = useState<string | null>(null);
+  const activeSetDefaultDialog = activeDialog;
+  const shouldPollMergeUpState =
+    displayedMergeUpState?.issues.some((issue) => {
+      if (!isMergeUpIssueClosed(issue)) {
+        return true;
+      }
+
+      if (displayedOverview?.kind !== "ready") {
+        return false;
+      }
+
+      return displayedOverview.branches.some(
+        (branch) => branch.name === issue.targetBranch && branch.canMergeUp
+      );
+    }) ?? false;
+  const isMergeUpStateLoading = mergeUpLoading && !displayedMergeUpState;
 
   useEffect(() => {
     setDisplayedOverview(OVERVIEW_SNAPSHOT_CACHE.get(overviewSnapshotCacheKey) ?? null);
@@ -1348,7 +2387,205 @@ function MicronautProjectDetailTabBody({
     OVERVIEW_SNAPSHOT_CACHE.delete(overviewSnapshotCacheKey);
   }, [data, overviewSnapshotCacheKey]);
 
-  async function refreshDisplayedOverview(showErrorToast = true): Promise<MicronautProjectOverview | null> {
+  useEffect(() => {
+    if (!mergeUpData) {
+      return;
+    }
+
+    setDisplayedMergeUpState((current) => mergeMergeUpState(current, mergeUpData));
+  }, [mergeUpData]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (!shouldPollMergeUpState) {
+      return;
+    }
+
+    refreshMergeUpState();
+    const intervalId = window.setInterval(() => {
+      refreshMergeUpState();
+    }, 5000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [refreshMergeUpState, shouldPollMergeUpState]);
+
+  useEffect(() => {
+    if (!displayedMergeUpState) {
+      return;
+    }
+
+    const nextStatuses = new Map<string, MicronautMergeUpIssue["status"]>();
+    for (const issue of displayedMergeUpState.issues) {
+      nextStatuses.set(issue.issueId, issue.status);
+    }
+
+    if (!mergeUpHydratedRef.current) {
+      mergeUpHydratedRef.current = true;
+      mergeUpStatusRef.current = nextStatuses;
+      return;
+    }
+
+    for (const issue of displayedMergeUpState.issues) {
+      const previousStatus = mergeUpStatusRef.current.get(issue.issueId);
+      if (!previousStatus || previousStatus === issue.status) {
+        continue;
+      }
+
+      const issueHref = getMergeUpIssueHref(issue, companyPrefix, companyId);
+      if (issue.status === "done") {
+        toast({
+          dedupeKey: `micronaut-merge-up-completed:${issue.issueId}`,
+          title: `Merge up done for ${issue.targetBranch}`,
+          body: `${issue.issueIdentifier} is marked done.`,
+          tone: "success",
+          action: issueHref
+            ? {
+                label: "Open issue",
+                href: issueHref
+              }
+            : undefined
+        });
+      }
+
+      if (issue.status === "blocked") {
+        toast({
+          dedupeKey: `micronaut-merge-up-blocked:${issue.issueId}`,
+          title: `Merge up blocked for ${issue.targetBranch}`,
+          body: `${issue.issueIdentifier} needs attention.`,
+          tone: "error"
+        });
+      }
+
+      if (issue.status === "cancelled") {
+        toast({
+          dedupeKey: `micronaut-merge-up-cancelled:${issue.issueId}`,
+          title: `Merge up cancelled for ${issue.targetBranch}`,
+          body: `${issue.issueIdentifier} was cancelled.`,
+          tone: "info",
+          action: issueHref
+            ? {
+                label: "Open issue",
+                href: issueHref
+              }
+            : undefined
+        });
+      }
+    }
+
+    mergeUpStatusRef.current = nextStatuses;
+  }, [companyId, companyPrefix, displayedMergeUpState, toast]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !displayedMergeUpState?.issues.length) {
+      return;
+    }
+
+    const issuesNeedingHydration = displayedMergeUpState.issues.filter((issue) => {
+      if (issue.pullRequestUrl) {
+        return false;
+      }
+
+      const issueRef = issue.issueIdentifier ?? issue.issueId;
+      if (!issueRef) {
+        return false;
+      }
+
+      const lookupKey = `${issue.issueId}:${issue.updatedAt}`;
+      return !mergeUpPullRequestLookupRef.current.has(lookupKey);
+    });
+
+    if (issuesNeedingHydration.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+
+    for (const issue of issuesNeedingHydration) {
+      const lookupKey = `${issue.issueId}:${issue.updatedAt}`;
+      mergeUpPullRequestLookupRef.current.add(lookupKey);
+
+      void fetchIssuePullRequestUrl(issue)
+        .then((pullRequestUrl) => {
+          if (cancelled || !pullRequestUrl) {
+            return;
+          }
+
+          setDisplayedMergeUpState((current) => {
+            if (!current) {
+              return current;
+            }
+
+            let changed = false;
+            const nextIssues = current.issues.map((candidate) => {
+              if (candidate.issueId !== issue.issueId || candidate.pullRequestUrl) {
+                return candidate;
+              }
+
+              changed = true;
+              return {
+                ...candidate,
+                pullRequestUrl
+              };
+            });
+
+            return changed
+              ? {
+                  ...current,
+                  issues: nextIssues
+                }
+              : current;
+          });
+        })
+        .catch(() => {
+          // Leave the issue row without a PR chip when the comments endpoint cannot be read.
+        });
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [displayedMergeUpState]);
+
+  function updateDisplayedMergeUpState(
+    updater: (state: MicronautMergeUpState) => MicronautMergeUpState
+  ): void {
+    setDisplayedMergeUpState((current) => updater(current ?? createEmptyMergeUpState()));
+  }
+
+  function setPreferredMergeUpAgentSnapshot(agent: MicronautMergeUpAgentOption): void {
+    updateDisplayedMergeUpState((current) => {
+      const nextAgents = current.agents.some((candidate) => candidate.id === agent.id)
+        ? current.agents
+        : [...current.agents, agent].sort((left, right) =>
+            left.name.localeCompare(right.name, "en", { sensitivity: "base" })
+          );
+
+      return {
+        ...current,
+        preferredAgentId: agent.id,
+        preferredAgentName: agent.name,
+        agents: nextAgents
+      };
+    });
+  }
+
+  function applyMergeUpIssueSnapshot(issue: MicronautMergeUpIssue): void {
+    updateDisplayedMergeUpState((current) => ({
+      ...current,
+      preferredAgentId: issue.agentId,
+      preferredAgentName: issue.agentName,
+      issues: upsertMergeUpIssueList(current.issues, issue)
+    }));
+  }
+
+  async function refreshDisplayedOverview(
+    showErrorToast = true
+  ): Promise<MicronautProjectOverview | null> {
     setIsRefreshingOverview(true);
 
     try {
@@ -1425,6 +2662,98 @@ function MicronautProjectDetailTabBody({
     }
   }
 
+  async function handleStartMergeUp(
+    branch: MicronautProjectBranch,
+    agentId?: string
+  ): Promise<void> {
+    const resolvedAgentId = agentId ?? displayedMergeUpState?.preferredAgentId ?? null;
+    if (!branch.name || pendingMergeUpTargetBranch || !resolvedAgentId) {
+      return;
+    }
+
+    setPendingMergeUpTargetBranch(branch.name);
+    setPendingMergeUpAgentId(resolvedAgentId);
+    setOpenMergeUpPickerBranchName(null);
+
+    try {
+      const result = (await startMergeUp({
+        companyId,
+        projectId,
+        targetBranch: branch.name,
+        agentId: resolvedAgentId
+      })) as MicronautStartMergeUpResult;
+
+      applyMergeUpIssueSnapshot(result.issue);
+      const selectedAgent =
+        displayedMergeUpState?.agents.find((candidate) => candidate.id === resolvedAgentId) ??
+        null;
+      if (selectedAgent) {
+        setPreferredMergeUpAgentSnapshot(selectedAgent);
+      }
+
+      const issueHref = getMergeUpIssueHref(result.issue, companyPrefix, companyId);
+      if (result.status === "created") {
+        toast({
+          dedupeKey: `micronaut-merge-up-created:${result.issue.issueId}`,
+          title: `Merge-up issue created for ${result.issue.targetBranch}`,
+          body: result.issue.agentName
+            ? `${result.issue.issueIdentifier} is now assigned to ${result.issue.agentName}.`
+            : `${result.issue.issueIdentifier} is now tracking this merge-up.`,
+          tone: "info",
+          action: issueHref
+            ? {
+                label: "Open issue",
+                href: issueHref
+              }
+            : undefined
+        });
+      } else {
+        toast({
+          dedupeKey: `micronaut-merge-up-existing:${result.issue.issueId}`,
+          title: `Merge-up issue already exists for ${result.issue.targetBranch}`,
+          body: `${result.issue.issueIdentifier} is already open for this branch.`,
+          tone: "info",
+          action: issueHref
+            ? {
+                label: "Open issue",
+                href: issueHref
+              }
+            : undefined
+        });
+      }
+    } catch (actionError) {
+      toast({
+        title: branch.name ? `Could not create merge-up issue for ${branch.name}` : "Could not create merge-up issue",
+        body: getErrorMessage(actionError, "The merge-up issue could not be created right now."),
+        tone: "error"
+      });
+    } finally {
+      setPendingMergeUpTargetBranch(null);
+      setPendingMergeUpAgentId(null);
+      refreshMergeUpState();
+    }
+  }
+
+  function closeActiveDialog(): void {
+    setActiveDialog(null);
+  }
+
+  function handleOpenMergeUpPicker(branch: MicronautProjectBranch): void {
+    setOpenMergeUpPickerBranchName(branch.name ?? null);
+  }
+
+  function handleCloseMergeUpPicker(): void {
+    setOpenMergeUpPickerBranchName(null);
+  }
+
+  function handleOpenSetDefaultPreview(branch: MicronautProjectBranch): void {
+    setActiveDialog({
+      kind: "setDefault",
+      branch,
+      defaultBranchName: displayedOverview?.kind === "ready" ? displayedOverview.defaultBranch : null
+    });
+  }
+
   if (loading && !displayedOverview) {
     return (
       <StatePanel
@@ -1452,15 +2781,16 @@ function MicronautProjectDetailTabBody({
     : "Default, next minor, and next major release branches for this repository.";
   const lastCheckedMeta = getLastCheckedMeta(displayedOverview.lastCheckedAt);
   const headerStatusLabel = isRefreshingOverview ? "Checking GitHub now..." : lastCheckedMeta.label;
-  const actionsDisabled = pendingBranchRole !== null || isRefreshingOverview;
+  const actionsDisabled =
+    pendingBranchRole !== null ||
+    isRefreshingOverview ||
+    pendingMergeUpAgentId !== null ||
+    pendingMergeUpTargetBranch !== null;
 
   return (
-    <MicronautSurface>
+    <MicronautSurface themeMode={themeMode}>
       <header className="micronaut-project-tab__header">
         <div className="micronaut-project-tab__header-main">
-          <div className="micronaut-project-tab__brand">
-            <img alt="Micronaut" src={MICRONAUT_SYMBOL_URL} />
-          </div>
           <div>
             <p className="micronaut-project-tab__eyebrow">Micronaut</p>
             <h2 className="micronaut-project-tab__title">{displayedOverview.repoFullName}</h2>
@@ -1534,16 +2864,34 @@ function MicronautProjectDetailTabBody({
       </Panel>
 
       <Panel description={branchDescription} title="Branches">
-        {displayedOverview.branches.map((branch) => (
-          <BranchRow
-            branch={branch}
-            defaultBranchName={displayedOverview.defaultBranch}
-            disabled={actionsDisabled}
-            isCreating={pendingBranchRole === branch.role}
-            key={branch.role}
-            onCreateBranch={handleCreateBranch}
-          />
-        ))}
+        {displayedOverview.branches.map((branch) => {
+          const mergeUpIssue = getBranchMergeUpIssue(displayedMergeUpState, branch.name);
+
+          return (
+            <BranchRow
+              branch={branch}
+              defaultBranchName={displayedOverview.defaultBranch}
+              disabled={actionsDisabled}
+              isCreating={pendingBranchRole === branch.role}
+              isMergeUpBusy={pendingMergeUpTargetBranch === branch.name}
+              isMergeUpPickerOpen={openMergeUpPickerBranchName === branch.name}
+              isMergeUpStateLoading={isMergeUpStateLoading}
+              key={branch.role}
+              mergeUpAgents={displayedMergeUpState?.agents ?? []}
+              mergeUpIssue={mergeUpIssue}
+              mergeUpIssueHref={getMergeUpIssueHref(mergeUpIssue, companyPrefix, companyId)}
+              onCloseMergeUpPicker={handleCloseMergeUpPicker}
+              onCreateBranch={handleCreateBranch}
+              onOpenMergeUpPicker={handleOpenMergeUpPicker}
+              onOpenSetDefaultPreview={handleOpenSetDefaultPreview}
+              onSelectMergeUpAgent={(selectedBranch, agentId) => {
+                void handleStartMergeUp(selectedBranch, agentId);
+              }}
+              pendingAgentId={pendingMergeUpAgentId}
+              preferredAgentId={displayedMergeUpState?.preferredAgentId ?? null}
+            />
+          );
+        })}
       </Panel>
 
       {displayedOverview.warnings.length > 0 ? (
@@ -1555,6 +2903,14 @@ function MicronautProjectDetailTabBody({
             ))}
           </ul>
         </section>
+      ) : null}
+
+      {activeSetDefaultDialog ? (
+        <SetDefaultPreviewDialog
+          branch={activeSetDefaultDialog.branch}
+          defaultBranchName={activeSetDefaultDialog.defaultBranchName}
+          onClose={closeActiveDialog}
+        />
       ) : null}
     </MicronautSurface>
   );
@@ -1570,10 +2926,9 @@ export function MicronautProjectDetailTab({
   return (
     <MicronautProjectDetailTabBody
       companyId={context.companyId}
+      companyPrefix={context.companyPrefix}
       key={`${context.companyId}:${context.entityId}`}
       projectId={context.entityId}
     />
   );
 }
-
-startMicronautTabIconObserver();

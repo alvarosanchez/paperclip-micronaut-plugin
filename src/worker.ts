@@ -2,29 +2,43 @@ import { execFile } from "node:child_process";
 import { userInfo } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { definePlugin, runWorker, type PluginContext } from "@paperclipai/plugin-sdk";
+import {
+  definePlugin,
+  runWorker,
+  type PluginContext
+} from "@paperclipai/plugin-sdk";
 import {
   MICRONAUT_CREATE_BRANCH_ACTION_KEY,
   MICRONAUT_GITHUB_ORGANIZATION,
+  MICRONAUT_MERGE_UP_STATE_DATA_KEY,
   MICRONAUT_PROJECT_OVERVIEW_DATA_KEY,
   MICRONAUT_REFRESH_PROJECT_OVERVIEW_ACTION_KEY,
+  MICRONAUT_SET_MERGE_UP_AGENT_ACTION_KEY,
+  MICRONAUT_START_MERGE_UP_ACTION_KEY,
   type MicronautBranchRole,
   type MicronautBranchSyncStatus,
+  type MicronautBranchVersionStatus,
   type MicronautCreateBranchResult,
+  type MicronautMergeUpAgentOption,
+  type MicronautMergeUpIssue,
+  type MicronautMergeUpState,
+  type MicronautStartMergeUpResult,
   type MicronautProjectBranch,
   type MicronautProjectOverview,
   type MicronautProjectOverviewReady,
   buildGitHubBranchUrl,
   buildGitHubCompareUrl,
   buildGradlePropertiesUrl,
-  buildRawGradlePropertiesUrl,
+  compareProjectVersionValues,
   deriveNextMajorBranchName,
   deriveNextMinorBranchName,
   deriveNextVersion,
+  deriveReleaseBranchProjectVersion,
   getMicronautBranchLabel,
   normalizeReleaseVersion,
   parseGitHubRepository,
   parseProjectVersion,
+  parseProjectVersionValue,
   resolveProjectRepositoryUrl
 } from "./micronaut.js";
 
@@ -35,8 +49,12 @@ const GITHUB_HEADERS = {
   "user-agent": "paperclip-micronaut-plugin"
 };
 const GH_ENV_BIN_KEY = "PAPERCLIP_MICRONAUT_GH_BIN";
+const PAPERCLIP_API_URL_ENV_KEY = "PAPERCLIP_API_URL";
+const PAPERCLIP_API_KEY_ENV_KEY = "PAPERCLIP_API_KEY";
 const MICRONAUT_STATE_NAMESPACE = "micronaut";
 const MICRONAUT_PROJECT_OVERVIEW_CACHE_STATE_KEY = "project-overview-cache";
+const MICRONAUT_COMPANY_SETTINGS_STATE_KEY = "company-settings";
+const MICRONAUT_PROJECT_MERGE_UP_STATE_KEY = "merge-up-issues";
 const MICRONAUT_PROJECT_OVERVIEW_CACHE_TTL_MS = 10 * 60 * 1000;
 const GH_EXECUTABLE_CANDIDATES =
   process.platform === "win32"
@@ -82,12 +100,42 @@ interface GitHubCompareResponse {
   behind_by?: number;
 }
 
+interface GitHubContentFileResponse {
+  type?: string;
+  encoding?: string;
+  content?: string;
+}
+
 interface MicronautProjectOverviewCacheEntry {
   version: 1;
   checkedAt: string;
   repoUrl: string;
   overview: MicronautProjectOverviewReady;
 }
+
+interface MicronautCompanySettingsState {
+  version: 1;
+  preferredMergeUpAgentId: string | null;
+}
+
+interface MicronautTrackedMergeUpIssueRecord {
+  targetBranch: string;
+  sourceBranch: string;
+  issueId: string;
+  issueIdentifier: string | null;
+  issueTitle: string | null;
+  agentId: string | null;
+  agentName: string | null;
+  agentUrlKey: string | null;
+  createdAt: string;
+}
+
+interface MicronautProjectMergeUpIssuesState {
+  version: 1;
+  issues: MicronautTrackedMergeUpIssueRecord[];
+}
+
+type MicronautIssueComment = Awaited<ReturnType<PluginContext["issues"]["listComments"]>>[number];
 
 class HttpRequestError extends Error {
   readonly status: number;
@@ -120,6 +168,41 @@ function buildProjectOverviewCacheScope(projectId: string) {
   };
 }
 
+function buildCompanySettingsScope(companyId: string) {
+  return {
+    scopeKind: "company" as const,
+    scopeId: companyId,
+    namespace: MICRONAUT_STATE_NAMESPACE,
+    stateKey: MICRONAUT_COMPANY_SETTINGS_STATE_KEY
+  };
+}
+
+function buildProjectMergeUpIssuesScope(projectId: string) {
+  return {
+    scopeKind: "project" as const,
+    scopeId: projectId,
+    namespace: MICRONAUT_STATE_NAMESPACE,
+    stateKey: MICRONAUT_PROJECT_MERGE_UP_STATE_KEY
+  };
+}
+
+function normalizeOptionalString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+function normalizeDateValue(value: unknown): string | null {
+  if (value instanceof Date && Number.isFinite(value.getTime())) {
+    return value.toISOString();
+  }
+
+  return normalizeOptionalString(value);
+}
+
 function normalizeProjectOverviewCacheEntry(
   value: unknown
 ): MicronautProjectOverviewCacheEntry | null {
@@ -150,6 +233,84 @@ function normalizeProjectOverviewCacheEntry(
     checkedAt,
     repoUrl,
     overview
+  };
+}
+
+function normalizeTrackedMergeUpIssueRecord(
+  value: unknown
+): MicronautTrackedMergeUpIssueRecord | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const targetBranch = normalizeOptionalString(candidate.targetBranch) ?? "";
+  const sourceBranch = normalizeOptionalString(candidate.sourceBranch) ?? "";
+  const issueId = normalizeOptionalString(candidate.issueId) ?? "";
+  const createdAt = normalizeOptionalString(candidate.createdAt) ?? "";
+
+  if (!targetBranch || !sourceBranch || !issueId || !createdAt) {
+    return null;
+  }
+
+  return {
+    targetBranch,
+    sourceBranch,
+    issueId,
+    issueIdentifier: normalizeOptionalString(candidate.issueIdentifier),
+    issueTitle: normalizeOptionalString(candidate.issueTitle),
+    agentId: normalizeOptionalString(candidate.agentId),
+    agentName: normalizeOptionalString(candidate.agentName),
+    agentUrlKey: normalizeOptionalString(candidate.agentUrlKey),
+    createdAt
+  };
+}
+
+function normalizeProjectMergeUpIssuesState(value: unknown): MicronautProjectMergeUpIssuesState {
+  if (!value || typeof value !== "object") {
+    return {
+      version: 1,
+      issues: []
+    };
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const issues = Array.isArray(candidate.issues)
+    ? candidate.issues
+        .map((issue) => normalizeTrackedMergeUpIssueRecord(issue))
+        .filter((issue): issue is MicronautTrackedMergeUpIssueRecord => Boolean(issue))
+    : [];
+
+  if (candidate.version !== 1) {
+    return {
+      version: 1,
+      issues
+    };
+  }
+
+  return {
+    version: 1,
+    issues
+  };
+}
+
+function normalizeCompanySettingsState(value: unknown): MicronautCompanySettingsState {
+  if (!value || typeof value !== "object") {
+    return {
+      version: 1,
+      preferredMergeUpAgentId: null
+    };
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const preferredMergeUpAgentId =
+    typeof candidate.preferredMergeUpAgentId === "string"
+      ? candidate.preferredMergeUpAgentId.trim() || null
+      : null;
+
+  return {
+    version: 1,
+    preferredMergeUpAgentId
   };
 }
 
@@ -202,6 +363,18 @@ function buildCompareApiUrl(owner: string, repo: string, baseBranch: string, hea
     repo,
     `/compare/${encodeURIComponent(baseBranch)}...${encodeURIComponent(headBranch)}`
   );
+}
+
+function buildContentsApiUrl(owner: string, repo: string, filePath: string, ref: string): string {
+  const encodedPath = filePath
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  const search = new URLSearchParams({
+    ref
+  });
+
+  return `${buildGitHubApiUrl(owner, repo, `/contents/${encodedPath}`)}?${search.toString()}`;
 }
 
 function buildRequestErrorMessage(url: string, status: number, bodyText: string): string {
@@ -274,6 +447,28 @@ function isGitHubApiRateLimitError(error: unknown): error is HttpRequestError {
     error instanceof HttpRequestError &&
     error.status === 403 &&
     /rate limit exceeded|secondary rate limit/i.test(error.message)
+  );
+}
+
+function shouldUseGitHubCliFallback(error: unknown): boolean {
+  if (isGitHubApiRateLimitError(error)) {
+    return true;
+  }
+
+  if (error instanceof HttpRequestError) {
+    return error.status === 408 || error.status === 429 || error.status >= 500;
+  }
+
+  if (error instanceof SyntaxError) {
+    return true;
+  }
+
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return /\baborted\b|\btimed?\s*out\b|fetch failed|network|socket|econnreset|eai_again|enotfound|etimedout/i.test(
+    error.message
   );
 }
 
@@ -440,13 +635,56 @@ async function fetchJsonViaGh<T>(endpoint: string): Promise<T> {
   }
 }
 
+function buildPaperclipApiIssueCommentsUrl(issueRef: string): string | null {
+  const baseUrl = normalizeOptionalString(process.env[PAPERCLIP_API_URL_ENV_KEY]);
+  if (!baseUrl) {
+    return null;
+  }
+
+  try {
+    return new URL(`/api/issues/${encodeURIComponent(issueRef)}/comments`, `${baseUrl}/`).toString();
+  } catch {
+    return null;
+  }
+}
+
+async function fetchIssueCommentsViaPaperclipApi(
+  ctx: PluginContext,
+  issueRef: string
+): Promise<MicronautIssueComment[]> {
+  const url = buildPaperclipApiIssueCommentsUrl(issueRef);
+  if (!url) {
+    return [];
+  }
+
+  const headers = new Headers({
+    accept: "application/json"
+  });
+  const apiKey = normalizeOptionalString(process.env[PAPERCLIP_API_KEY_ENV_KEY]);
+  if (apiKey) {
+    headers.set("authorization", `Bearer ${apiKey}`);
+  }
+
+  const response = await ctx.http.fetch(url, {
+    headers
+  });
+  const bodyText = await response.text();
+
+  if (!response.ok) {
+    throw new HttpRequestError(buildRequestErrorMessage(url, response.status, bodyText), response.status);
+  }
+
+  const parsed = bodyText ? (JSON.parse(bodyText) as unknown) : [];
+  return Array.isArray(parsed) ? (parsed as MicronautIssueComment[]) : [];
+}
+
 async function fetchJson<T>(ctx: PluginContext, url: string, init: RequestInit = {}): Promise<T> {
   const githubEndpoint = extractGitHubApiEndpoint(url);
 
   try {
     return await fetchJsonOverHttp<T>(ctx, url, init);
   } catch (error) {
-    if (!githubEndpoint || !isGitHubApiRateLimitError(error)) {
+    if (!githubEndpoint || !shouldUseGitHubCliFallback(error)) {
       throw error;
     }
 
@@ -457,28 +695,43 @@ async function fetchJson<T>(ctx: PluginContext, url: string, init: RequestInit =
         throw ghError;
       }
 
-      throw new GitHubCliFallbackError(error, ghError);
+      if (error instanceof HttpRequestError) {
+        throw new GitHubCliFallbackError(error, ghError);
+      }
+
+      throw error;
     }
   }
 }
 
-async function fetchText(ctx: PluginContext, url: string, init: RequestInit = {}): Promise<string> {
-  const response = await ctx.http.fetch(url, {
-    ...init,
-    headers: mergeHeaders(
-      {
-        "user-agent": GITHUB_HEADERS["user-agent"]
-      },
-      init.headers
-    )
-  });
-  const bodyText = await response.text();
-
-  if (!response.ok) {
-    throw new HttpRequestError(buildRequestErrorMessage(url, response.status, bodyText), response.status);
+function decodeGitHubContentFile(response: GitHubContentFileResponse, description: string): string {
+  const type = response.type?.trim().toLowerCase() ?? "";
+  if (type && type !== "file") {
+    throw new Error(`${description} is not a file.`);
   }
 
-  return bodyText;
+  const encoding = response.encoding?.trim().toLowerCase() ?? "";
+  const content = typeof response.content === "string" ? response.content.trim() : "";
+  if (encoding !== "base64" || !content) {
+    throw new Error(`${description} did not include decodable file content.`);
+  }
+
+  return Buffer.from(content.replace(/\s+/g, ""), "base64").toString("utf8");
+}
+
+async function fetchGitHubFileText(
+  ctx: PluginContext,
+  owner: string,
+  repo: string,
+  filePath: string,
+  ref: string
+): Promise<string> {
+  const response = await fetchJson<GitHubContentFileResponse>(
+    ctx,
+    buildContentsApiUrl(owner, repo, filePath, ref)
+  );
+
+  return decodeGitHubContentFile(response, `${filePath} on ${owner}/${repo}@${ref}`);
 }
 
 function describePartialFailure(
@@ -529,6 +782,59 @@ function resolveBranchSyncStatus(
   return "behind";
 }
 
+function resolveBranchVersionStatus(branch: Pick<
+  MicronautProjectBranch,
+  "role" | "exists" | "projectVersion" | "expectedProjectVersion"
+>): MicronautBranchVersionStatus {
+  if (branch.role === "default") {
+    return "default";
+  }
+
+  if (branch.exists === false) {
+    return "missing";
+  }
+
+  if (!branch.projectVersion || !branch.expectedProjectVersion) {
+    return "unavailable";
+  }
+
+  if (branch.projectVersion === branch.expectedProjectVersion) {
+    return "aligned";
+  }
+
+  const parsedProjectVersion = parseProjectVersionValue(branch.projectVersion);
+  const parsedExpectedVersion = parseProjectVersionValue(branch.expectedProjectVersion);
+  if (!parsedProjectVersion || !parsedExpectedVersion) {
+    return "unexpected";
+  }
+
+  return compareProjectVersionValues(parsedProjectVersion, parsedExpectedVersion) < 0
+    ? "behind"
+    : "unexpected";
+}
+
+function applyDerivedBranchState(branch: MicronautProjectBranch): MicronautProjectBranch {
+  const canCreateBranch = branch.role !== "default" && branch.exists === false && Boolean(branch.name);
+  const canMergeUp =
+    branch.role !== "default" &&
+    branch.exists === true &&
+    typeof branch.behindBy === "number" &&
+    branch.behindBy > 0;
+  const canSetDefault =
+    branch.role !== "default" &&
+    branch.exists === true &&
+    typeof branch.behindBy === "number" &&
+    branch.behindBy === 0;
+
+  return {
+    ...branch,
+    versionStatus: resolveBranchVersionStatus(branch),
+    canCreateBranch,
+    canMergeUp,
+    canSetDefault
+  };
+}
+
 function createBranchSummary(
   role: MicronautBranchRole,
   branchName: string | null,
@@ -539,7 +845,7 @@ function createBranchSummary(
 ): MicronautProjectBranch {
   const hasBranchName = Boolean(branchName);
 
-  return {
+  return applyDerivedBranchState({
     role,
     label: getMicronautBranchLabel(role),
     name: branchName,
@@ -555,8 +861,15 @@ function createBranchSummary(
     lastUpdatedAt: null,
     lastCommitSha: null,
     lastCommitUrl: null,
+    projectVersion: null,
+    projectVersionUrl: null,
+    expectedProjectVersion: branchName ? deriveReleaseBranchProjectVersion(branchName) : null,
+    versionStatus: role === "default" ? "default" : "unavailable",
+    canCreateBranch: false,
+    canMergeUp: false,
+    canSetDefault: false,
     ...overrides
-  };
+  });
 }
 
 function logBranchWarning(
@@ -616,13 +929,16 @@ async function loadBranchSummary(
     lastCommitSha: commitSha
   });
 
-  const [commitResult, compareResult] = await Promise.allSettled([
+  const [commitResult, compareResult, projectVersionResult] = await Promise.allSettled([
     commitSha ? fetchJson<GitHubCommitResponse>(ctx, buildCommitApiUrl(owner, repo, commitSha)) : Promise.resolve(null),
     role !== "default" && defaultBranch
       ? fetchJson<GitHubCompareResponse>(
           ctx,
           buildCompareApiUrl(owner, repo, defaultBranch, resolvedBranchName)
         )
+      : Promise.resolve(null),
+    role !== "default"
+      ? fetchGitHubFileText(ctx, owner, repo, "gradle.properties", resolvedBranchName)
       : Promise.resolve(null)
   ]);
 
@@ -648,21 +964,44 @@ async function loadBranchSummary(
     );
   }
 
+  if (projectVersionResult.status === "fulfilled" && typeof projectVersionResult.value === "string") {
+    const parsedProjectVersion = parseProjectVersion(projectVersionResult.value);
+
+    summary = {
+      ...summary,
+      projectVersion: parsedProjectVersion,
+      projectVersionUrl: buildGradlePropertiesUrl(owner, repo, resolvedBranchName)
+    };
+
+    if (!parsedProjectVersion) {
+      warnings.push(`The root gradle.properties file on ${resolvedBranchName} does not define projectVersion.`);
+    }
+  } else if (projectVersionResult.status === "rejected") {
+    warnings.push(`The projectVersion for ${resolvedBranchName} is temporarily unavailable.`);
+    logBranchWarning(
+      ctx,
+      repoFullName,
+      resolvedBranchName,
+      "Could not load Micronaut branch gradle.properties.",
+      projectVersionResult.reason
+    );
+  }
+
   if (role === "default") {
-    return summary;
+    return applyDerivedBranchState(summary);
   }
 
   if (compareResult.status === "fulfilled" && compareResult.value) {
     const aheadBy = numberOrNull(compareResult.value.ahead_by);
     const behindBy = numberOrNull(compareResult.value.behind_by);
 
-    return {
+    return applyDerivedBranchState({
       ...summary,
       compareUrl: compareResult.value.html_url?.trim() || summary.compareUrl,
       aheadBy,
       behindBy,
       syncStatus: resolveBranchSyncStatus(role, aheadBy, behindBy)
-    };
+    });
   }
 
   if (compareResult.status === "rejected") {
@@ -676,7 +1015,7 @@ async function loadBranchSummary(
     );
   }
 
-  return summary;
+  return applyDerivedBranchState(summary);
 }
 
 async function loadMicronautProjectOverviewReady(
@@ -742,6 +1081,7 @@ async function loadMicronautProjectOverviewReady(
 
   let nextVersion: string | null = null;
   let gradlePropertiesUrl: string | null = null;
+  let defaultBranchProjectVersion: string | null = null;
   if (defaultBranch) {
     gradlePropertiesUrl = buildGradlePropertiesUrl(
       parsedRepository.owner,
@@ -750,11 +1090,15 @@ async function loadMicronautProjectOverviewReady(
     );
 
     try {
-      const gradlePropertiesText = await fetchText(
+      const gradlePropertiesText = await fetchGitHubFileText(
         ctx,
-        buildRawGradlePropertiesUrl(parsedRepository.owner, parsedRepository.repo, defaultBranch)
+        parsedRepository.owner,
+        parsedRepository.repo,
+        "gradle.properties",
+        defaultBranch
       );
-      nextVersion = deriveNextVersion(parseProjectVersion(gradlePropertiesText));
+      defaultBranchProjectVersion = parseProjectVersion(gradlePropertiesText);
+      nextVersion = deriveNextVersion(defaultBranchProjectVersion);
       if (!nextVersion) {
         warnings.push("The root gradle.properties file does not define projectVersion.");
       }
@@ -813,7 +1157,20 @@ async function loadMicronautProjectOverviewReady(
       defaultBranch,
       warnings
     )
-  ]);
+  ]).then((loadedBranches) =>
+    loadedBranches.map((branch) => {
+      if (branch.role !== "default") {
+        return branch;
+      }
+
+      return applyDerivedBranchState({
+        ...branch,
+        projectVersion: defaultBranchProjectVersion,
+        projectVersionUrl: gradlePropertiesUrl,
+        expectedProjectVersion: deriveReleaseBranchProjectVersion(defaultBranch)
+      });
+    })
+  );
 
   return {
     kind: "ready",
@@ -942,6 +1299,591 @@ async function refreshMicronautProjectOverview(
   return readMicronautProjectOverview(ctx, params, { forceRefresh: true });
 }
 
+async function readCompanySettingsState(
+  ctx: PluginContext,
+  companyId: string
+): Promise<MicronautCompanySettingsState> {
+  return normalizeCompanySettingsState(await ctx.state.get(buildCompanySettingsScope(companyId)));
+}
+
+async function writeCompanySettingsState(
+  ctx: PluginContext,
+  companyId: string,
+  state: MicronautCompanySettingsState
+): Promise<void> {
+  await ctx.state.set(buildCompanySettingsScope(companyId), state);
+}
+
+async function readProjectMergeUpIssuesState(
+  ctx: PluginContext,
+  projectId: string
+): Promise<MicronautProjectMergeUpIssuesState> {
+  return normalizeProjectMergeUpIssuesState(
+    await ctx.state.get(buildProjectMergeUpIssuesScope(projectId))
+  );
+}
+
+async function writeProjectMergeUpIssuesState(
+  ctx: PluginContext,
+  projectId: string,
+  state: MicronautProjectMergeUpIssuesState
+): Promise<void> {
+  await ctx.state.set(buildProjectMergeUpIssuesScope(projectId), state);
+}
+
+function upsertTrackedMergeUpIssueRecord(
+  issues: MicronautTrackedMergeUpIssueRecord[],
+  issue: MicronautTrackedMergeUpIssueRecord
+): MicronautTrackedMergeUpIssueRecord[] {
+  const nextIssues = issues.filter(
+    (candidate) =>
+      candidate.issueId !== issue.issueId && candidate.targetBranch !== issue.targetBranch
+  );
+
+  nextIssues.push(issue);
+  return nextIssues.sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
+}
+
+async function persistTrackedMergeUpIssueRecord(
+  ctx: PluginContext,
+  projectId: string,
+  issue: MicronautTrackedMergeUpIssueRecord
+): Promise<MicronautTrackedMergeUpIssueRecord> {
+  const current = await readProjectMergeUpIssuesState(ctx, projectId);
+  await writeProjectMergeUpIssuesState(ctx, projectId, {
+    version: 1,
+    issues: upsertTrackedMergeUpIssueRecord(current.issues, issue)
+  });
+
+  return issue;
+}
+
+function isClosedMergeUpIssueStatus(status: string | null | undefined): boolean {
+  return status === "done" || status === "cancelled";
+}
+
+function sortMergeUpIssues(issues: MicronautMergeUpIssue[]): MicronautMergeUpIssue[] {
+  return [...issues].sort((left, right) => {
+    const leftVisible = !isClosedMergeUpIssueStatus(left.status);
+    const rightVisible = !isClosedMergeUpIssueStatus(right.status);
+    if (leftVisible !== rightVisible) {
+      return leftVisible ? -1 : 1;
+    }
+
+    return Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
+  });
+}
+
+function getUnknownObjectStringProperty(value: unknown, key: string): string | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const candidate = (value as Record<string, unknown>)[key];
+  if (candidate instanceof Date && Number.isFinite(candidate.getTime())) {
+    return candidate.toISOString();
+  }
+
+  return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
+}
+
+function extractPullRequestUrl(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const match =
+    /https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+(?:[/?#][^\s)]*)?/i.exec(
+      value
+    );
+  return match?.[0] ?? null;
+}
+
+function getIssueCommentTimestamp(comment: MicronautIssueComment): number {
+  const timestamp =
+    normalizeDateValue(getUnknownObjectStringProperty(comment, "updatedAt")) ??
+    normalizeDateValue(getUnknownObjectStringProperty(comment, "createdAt"));
+  if (!timestamp) {
+    return 0;
+  }
+
+  const parsed = Date.parse(timestamp);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function extractPullRequestUrlFromComments(comments: MicronautIssueComment[]): string | null {
+  for (const comment of [...comments].sort(
+    (left, right) => getIssueCommentTimestamp(right) - getIssueCommentTimestamp(left)
+  )) {
+    const pullRequestUrl = extractPullRequestUrl(getUnknownObjectStringProperty(comment, "body"));
+    if (pullRequestUrl) {
+      return pullRequestUrl;
+    }
+  }
+
+  return null;
+}
+
+async function buildMergeUpIssueSnapshot(
+  ctx: PluginContext,
+  companyId: string,
+  record: MicronautTrackedMergeUpIssueRecord,
+  agentLookup?: Map<string, Awaited<ReturnType<PluginContext["agents"]["list"]>>[number]>
+): Promise<{
+  record: MicronautTrackedMergeUpIssueRecord;
+  issue: MicronautMergeUpIssue;
+} | null> {
+  const hostIssue = await ctx.issues.get(record.issueId, companyId);
+  if (!hostIssue) {
+    return null;
+  }
+
+  const resolvedAgentId = hostIssue.assigneeAgentId ?? record.agentId ?? null;
+  const resolvedAgent =
+    resolvedAgentId
+      ? (agentLookup?.get(resolvedAgentId) ?? (await ctx.agents.get(resolvedAgentId, companyId)))
+      : null;
+  const createdAt = normalizeDateValue(hostIssue.createdAt) ?? record.createdAt;
+  const updatedAt = normalizeDateValue(hostIssue.updatedAt) ?? createdAt;
+  const identifier = normalizeOptionalString(hostIssue.identifier) ?? record.issueIdentifier ?? hostIssue.id;
+  const title = normalizeOptionalString(hostIssue.title) ?? record.issueTitle ?? `Merge up ${record.sourceBranch} into ${record.targetBranch}`;
+  const agentName = resolvedAgent?.name ?? record.agentName ?? null;
+  const agentUrlKey = resolvedAgent?.urlKey ?? record.agentUrlKey ?? resolvedAgentId;
+  const closedAt =
+    hostIssue.status === "done"
+      ? normalizeDateValue(hostIssue.completedAt) ?? updatedAt
+      : hostIssue.status === "cancelled"
+        ? normalizeDateValue(hostIssue.cancelledAt) ?? updatedAt
+        : null;
+  let pullRequestUrl: string | null = null;
+  try {
+    const comments = await ctx.issues.listComments(hostIssue.id, companyId);
+    pullRequestUrl = extractPullRequestUrlFromComments(comments);
+  } catch (error) {
+    ctx.logger.warn("Could not load Micronaut merge-up issue comments.", {
+      issueId: hostIssue.id,
+      companyId,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+
+  if (!pullRequestUrl) {
+    const issueRef = identifier || hostIssue.id;
+    try {
+      const fallbackComments = await fetchIssueCommentsViaPaperclipApi(ctx, issueRef);
+      pullRequestUrl = extractPullRequestUrlFromComments(fallbackComments);
+    } catch (error) {
+      ctx.logger.warn("Could not load Micronaut merge-up issue comments from the Paperclip API.", {
+        issueId: hostIssue.id,
+        issueRef,
+        companyId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  const nextRecord: MicronautTrackedMergeUpIssueRecord = {
+    ...record,
+    issueIdentifier: identifier,
+    issueTitle: title,
+    agentId: resolvedAgentId,
+    agentName,
+    agentUrlKey,
+    createdAt
+  };
+
+  return {
+    record: nextRecord,
+    issue: {
+      targetBranch: record.targetBranch,
+      sourceBranch: record.sourceBranch,
+      issueId: hostIssue.id,
+      issueIdentifier: identifier,
+      issueTitle: title,
+      pullRequestUrl,
+      status: hostIssue.status,
+      agentId: resolvedAgentId,
+      agentName,
+      agentUrlKey,
+      createdAt,
+      updatedAt,
+      closedAt
+    }
+  };
+}
+
+function normalizeMergeUpAgentOption(agent: {
+  id: string;
+  name: string;
+  urlKey: string;
+  title: string | null;
+  icon?: string | null;
+  status: string;
+}): MicronautMergeUpAgentOption {
+  return {
+    id: agent.id,
+    name: agent.name,
+    urlKey: agent.urlKey,
+    title: agent.title,
+    icon: normalizeOptionalString(agent.icon) ?? null,
+    status: agent.status
+  };
+}
+
+function isSelectableMergeUpAgentStatus(status: string): boolean {
+  return status !== "terminated" && status !== "pending_approval";
+}
+
+async function readMicronautMergeUpState(
+  ctx: PluginContext,
+  params: Record<string, unknown>
+): Promise<MicronautMergeUpState> {
+  const companyId = requireString(params, "companyId");
+  const projectId = requireString(params, "projectId");
+  const project = await ctx.projects.get(projectId, companyId);
+
+  if (!project) {
+    throw new Error(`Project ${projectId} was not found.`);
+  }
+
+  const [settings, agents, projectIssuesState] = await Promise.all([
+    readCompanySettingsState(ctx, companyId),
+    ctx.agents.list({
+      companyId,
+      limit: 200
+    }),
+    readProjectMergeUpIssuesState(ctx, projectId)
+  ]);
+  const agentLookup = new Map(agents.map((agent) => [agent.id, agent] as const));
+
+  const agentOptions = agents
+    .filter((agent) => isSelectableMergeUpAgentStatus(agent.status))
+    .map((agent) => normalizeMergeUpAgentOption(agent))
+    .sort((left, right) => left.name.localeCompare(right.name, "en", { sensitivity: "base" }));
+
+  const preferredAgent = settings.preferredMergeUpAgentId
+    ? agentOptions.find((agent) => agent.id === settings.preferredMergeUpAgentId) ?? null
+    : null;
+
+  if (settings.preferredMergeUpAgentId && !preferredAgent) {
+    await writeCompanySettingsState(ctx, companyId, {
+      version: 1,
+      preferredMergeUpAgentId: null
+    });
+  }
+
+  const hydratedIssues = (
+    await Promise.all(
+      projectIssuesState.issues.map((issue) =>
+        buildMergeUpIssueSnapshot(ctx, companyId, issue, agentLookup)
+      )
+    )
+  ).filter(
+    (issue): issue is NonNullable<Awaited<ReturnType<typeof buildMergeUpIssueSnapshot>>> =>
+      Boolean(issue)
+  );
+  const nextTrackedIssues = hydratedIssues.map((issue) => issue.record);
+  if (JSON.stringify(nextTrackedIssues) !== JSON.stringify(projectIssuesState.issues)) {
+    await writeProjectMergeUpIssuesState(ctx, projectId, {
+      version: 1,
+      issues: nextTrackedIssues
+    });
+  }
+
+  return {
+    kind: "ready",
+    preferredAgentId: preferredAgent?.id ?? null,
+    preferredAgentName: preferredAgent?.name ?? null,
+    agents: agentOptions,
+    issues: sortMergeUpIssues(hydratedIssues.map((issue) => issue.issue))
+  };
+}
+
+async function setMicronautMergeUpAgent(
+  ctx: PluginContext,
+  params: Record<string, unknown>
+): Promise<MicronautMergeUpAgentOption> {
+  const companyId = requireString(params, "companyId");
+  const agentId = requireString(params, "agentId");
+  const agent = await ctx.agents.get(agentId, companyId);
+
+  if (!agent || !isSelectableMergeUpAgentStatus(agent.status)) {
+    throw new Error("Select an available agent to run Micronaut merge ups.");
+  }
+
+  await writeCompanySettingsState(ctx, companyId, {
+    version: 1,
+    preferredMergeUpAgentId: agent.id
+  });
+
+  return normalizeMergeUpAgentOption(agent);
+}
+
+function buildMergeUpIssueTitle(input: {
+  sourceBranch: string;
+  targetBranch: string;
+}): string {
+  return `Merge up ${input.sourceBranch} into ${input.targetBranch}`;
+}
+
+function buildMergeUpIssueDescription(input: {
+  projectName: string;
+  repoFullName: string;
+  sourceBranch: string;
+  targetBranch: string;
+  expectedProjectVersion: string | null;
+  targetBranchProjectVersion: string | null;
+  targetBranchVersionStatus: MicronautBranchVersionStatus;
+}): string {
+  const needsProjectVersionAlignment =
+    input.targetBranchVersionStatus === "behind" &&
+    input.targetBranchProjectVersion &&
+    input.expectedProjectVersion;
+
+  return [
+    `Merge up \`${input.sourceBranch}\` into \`${input.targetBranch}\`.`,
+    "",
+    `Project: ${input.projectName}`,
+    `Repository: ${input.repoFullName}`,
+    "",
+    "Goal:",
+    `Open a pull request into \`${input.targetBranch}\` that brings in the latest changes from \`${input.sourceBranch}\`.`,
+    "",
+    "Expected workflow:",
+    `1. Start from \`origin/${input.targetBranch}\`.`,
+    `2. Merge \`origin/${input.sourceBranch}\`.`,
+    needsProjectVersionAlignment
+      ? `3. Update \`gradle.properties\` on this work branch so \`projectVersion=${input.targetBranchProjectVersion}\` becomes \`projectVersion=${input.expectedProjectVersion}\`.`
+      : "3. Resolve conflicts carefully without dropping changes from either branch.",
+    needsProjectVersionAlignment
+      ? "4. Resolve conflicts carefully without dropping changes from either branch."
+      : "4. Run the smallest relevant validation for the files you touched.",
+    needsProjectVersionAlignment
+      ? "5. Run the smallest relevant validation for the files you touched."
+      : `5. Push a working branch and open a PR targeting \`${input.targetBranch}\`.`,
+    needsProjectVersionAlignment
+      ? `6. Push a working branch and open a PR targeting \`${input.targetBranch}\`.`
+      : null,
+    "",
+    "Constraints:",
+    "- Never force-push or rewrite history.",
+    `- Never push directly to \`${input.sourceBranch}\` or \`${input.targetBranch}\`.`,
+    "- Do not change the repository default branch.",
+    needsProjectVersionAlignment
+      ? `- This branch is also behind on versioning, so the PR must include the required \`gradle.properties\` change to \`${input.expectedProjectVersion}\`.`
+      : "- Only edit `gradle.properties` if the merge itself requires preserving an existing change from one of the two branches.",
+    "- If auth, branch protection, or tooling blocks you, stop and report the exact blocker.",
+    "",
+    "When you finish:",
+    "- Comment with the PR URL and the validation you ran.",
+    "- Close the issue with a short summary of conflicts or follow-up work."
+  ]
+    .filter((line): line is string => line !== null)
+    .join("\n");
+}
+
+function buildMergeUpIssueWakePrompt(input: {
+  issueIdentifier: string;
+  issueTitle: string;
+  projectName: string;
+  repoFullName: string;
+  sourceBranch: string;
+  targetBranch: string;
+}): string {
+  return [
+    `You were just assigned Paperclip issue ${input.issueIdentifier}: ${input.issueTitle}.`,
+    `Project: ${input.projectName}`,
+    `Repository: ${input.repoFullName}`,
+    "",
+    "Open your assigned issue queue, pick up that issue immediately, and follow the issue instructions as the source of truth.",
+    `This work is the Micronaut merge up from \`${input.sourceBranch}\` into \`${input.targetBranch}\`.`,
+    "If another run is already active, make sure this issue is still on your radar as the next queued task."
+  ].join("\n");
+}
+
+async function startMicronautMergeUp(
+  ctx: PluginContext,
+  params: Record<string, unknown>
+): Promise<MicronautStartMergeUpResult> {
+  const companyId = requireString(params, "companyId");
+  const projectId = requireString(params, "projectId");
+  const targetBranch = requireString(params, "targetBranch").trim();
+  const requestedAgentId =
+    typeof params.agentId === "string" && params.agentId.trim() ? params.agentId.trim() : null;
+  const project = await ctx.projects.get(projectId, companyId);
+
+  if (!project) {
+    throw new Error(`Project ${projectId} was not found.`);
+  }
+
+  const repoUrl = resolveProjectRepositoryUrl(project);
+  const parsedRepository = parseGitHubRepository(repoUrl);
+  if (!parsedRepository) {
+    throw new Error("This project is not connected to a GitHub repository.");
+  }
+
+  if (parsedRepository.owner !== MICRONAUT_GITHUB_ORGANIZATION) {
+    throw new Error(
+      `This action is only available for repositories in the ${MICRONAUT_GITHUB_ORGANIZATION} organization.`
+    );
+  }
+
+  const currentIssuesState = await readProjectMergeUpIssuesState(ctx, projectId);
+
+  const settings = await readCompanySettingsState(ctx, companyId);
+  const agentId = requestedAgentId ?? settings.preferredMergeUpAgentId;
+  if (!agentId) {
+    throw new Error("Choose an agent before starting a Micronaut merge up.");
+  }
+
+  const agent = await ctx.agents.get(agentId, companyId);
+  if (!agent || !isSelectableMergeUpAgentStatus(agent.status)) {
+    if (!requestedAgentId && settings.preferredMergeUpAgentId) {
+      await writeCompanySettingsState(ctx, companyId, {
+        version: 1,
+        preferredMergeUpAgentId: null
+      });
+    }
+
+    throw new Error("Choose an available agent before starting a Micronaut merge up.");
+  }
+
+  if (settings.preferredMergeUpAgentId !== agent.id) {
+    await writeCompanySettingsState(ctx, companyId, {
+      version: 1,
+      preferredMergeUpAgentId: agent.id
+    });
+  }
+
+  const repoFullName = `${parsedRepository.owner}/${parsedRepository.repo}`;
+  const repository = await fetchJson<GitHubRepositoryResponse>(
+    ctx,
+    buildGitHubApiUrl(parsedRepository.owner, parsedRepository.repo, "")
+  );
+  const sourceBranch = repository.default_branch?.trim();
+
+  if (!sourceBranch) {
+    throw new Error(
+      `GitHub did not report a default branch for ${parsedRepository.owner}/${parsedRepository.repo}.`
+    );
+  }
+
+  const branchSummary = await loadBranchSummary(
+    ctx,
+    parsedRepository.owner,
+    parsedRepository.repo,
+    repoFullName,
+    "nextMinor",
+    targetBranch,
+    sourceBranch,
+    []
+  );
+
+  if (branchSummary.exists !== true) {
+    throw new Error(`${targetBranch} does not exist yet, so it cannot be merged up.`);
+  }
+
+  if (!branchSummary.canMergeUp) {
+    throw new Error(`${targetBranch} is not behind ${sourceBranch}, so a merge up is not needed right now.`);
+  }
+
+  const existingTrackedIssue = currentIssuesState.issues.find(
+    (issue) => issue.targetBranch === targetBranch
+  );
+  if (existingTrackedIssue) {
+    const existingSnapshot = await buildMergeUpIssueSnapshot(ctx, companyId, existingTrackedIssue);
+    if (existingSnapshot && !isClosedMergeUpIssueStatus(existingSnapshot.issue.status)) {
+      return {
+        status: "already_exists",
+        issue: existingSnapshot.issue
+      };
+    }
+  }
+
+  const createdIssue = await ctx.issues.create({
+    companyId,
+    projectId,
+    title: buildMergeUpIssueTitle({
+      sourceBranch,
+      targetBranch
+    }),
+    description: buildMergeUpIssueDescription({
+      projectName: project.name,
+      repoFullName,
+      sourceBranch,
+      targetBranch,
+      expectedProjectVersion: branchSummary.expectedProjectVersion,
+      targetBranchProjectVersion: branchSummary.projectVersion,
+      targetBranchVersionStatus: branchSummary.versionStatus
+    }),
+    priority: "medium",
+    assigneeAgentId: agent.id
+  });
+
+  let liveIssue = createdIssue;
+  try {
+    liveIssue = await ctx.issues.update(createdIssue.id, { status: "todo" }, companyId);
+  } catch (error) {
+    const fallbackRecord: MicronautTrackedMergeUpIssueRecord = {
+      targetBranch,
+      sourceBranch,
+      issueId: createdIssue.id,
+      issueIdentifier: normalizeOptionalString(createdIssue.identifier),
+      issueTitle: normalizeOptionalString(createdIssue.title),
+      agentId: agent.id,
+      agentName: agent.name,
+      agentUrlKey: agent.urlKey,
+      createdAt: normalizeDateValue(createdIssue.createdAt) ?? new Date().toISOString()
+    };
+    await persistTrackedMergeUpIssueRecord(ctx, projectId, fallbackRecord);
+    throw error;
+  }
+
+  const trackedIssueRecord: MicronautTrackedMergeUpIssueRecord = {
+    targetBranch,
+    sourceBranch,
+    issueId: liveIssue.id,
+    issueIdentifier: normalizeOptionalString(liveIssue.identifier),
+    issueTitle: normalizeOptionalString(liveIssue.title),
+    agentId: agent.id,
+    agentName: agent.name,
+    agentUrlKey: agent.urlKey,
+    createdAt: normalizeDateValue(liveIssue.createdAt) ?? new Date().toISOString()
+  };
+  await persistTrackedMergeUpIssueRecord(ctx, projectId, trackedIssueRecord);
+
+  const issueSnapshot = await buildMergeUpIssueSnapshot(ctx, companyId, trackedIssueRecord);
+  if (!issueSnapshot) {
+    throw new Error("The merge-up issue was created, but it could not be loaded afterwards.");
+  }
+
+  try {
+    await ctx.agents.invoke(agent.id, companyId, {
+      reason: "issue_assigned",
+      prompt: buildMergeUpIssueWakePrompt({
+        issueIdentifier: issueSnapshot.issue.issueIdentifier,
+        issueTitle: issueSnapshot.issue.issueTitle,
+        projectName: project.name,
+        repoFullName,
+        sourceBranch,
+        targetBranch
+      })
+    });
+  } catch (error) {
+    ctx.logger.warn("Could not wake Micronaut merge-up assignee after issue creation.", {
+      issueId: issueSnapshot.issue.issueId,
+      agentId: agent.id,
+      projectId,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+
+  return {
+    status: "created",
+    issue: issueSnapshot.issue
+  };
+}
+
 async function createMicronautBranch(
   ctx: PluginContext,
   params: Record<string, unknown>
@@ -1060,8 +2002,17 @@ const plugin = definePlugin({
     ctx.data.register(MICRONAUT_PROJECT_OVERVIEW_DATA_KEY, async (params) =>
       readMicronautProjectOverview(ctx, params)
     );
+    ctx.data.register(MICRONAUT_MERGE_UP_STATE_DATA_KEY, async (params) =>
+      readMicronautMergeUpState(ctx, params)
+    );
     ctx.actions.register(MICRONAUT_REFRESH_PROJECT_OVERVIEW_ACTION_KEY, async (params) =>
       refreshMicronautProjectOverview(ctx, params)
+    );
+    ctx.actions.register(MICRONAUT_SET_MERGE_UP_AGENT_ACTION_KEY, async (params) =>
+      setMicronautMergeUpAgent(ctx, params)
+    );
+    ctx.actions.register(MICRONAUT_START_MERGE_UP_ACTION_KEY, async (params) =>
+      startMicronautMergeUp(ctx, params)
     );
     ctx.actions.register(MICRONAUT_CREATE_BRANCH_ACTION_KEY, async (params) =>
       createMicronautBranch(ctx, params)
