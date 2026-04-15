@@ -7,10 +7,17 @@ const manifestBuildOptions = {
   ...presets.esbuild.manifest,
   bundle: true
 };
+const uiBuildOptions = {
+  ...presets.esbuild.ui,
+  loader: {
+    ...(presets.esbuild.ui.loader ?? {}),
+    ".svg": "dataurl"
+  }
+};
 
 const workerCtx = await esbuild.context(presets.esbuild.worker);
 const manifestCtx = await esbuild.context(manifestBuildOptions);
-const uiCtx = await esbuild.context(presets.esbuild.ui);
+const uiCtx = await esbuild.context(uiBuildOptions);
 
 if (watch) {
   await Promise.all([workerCtx.watch(), manifestCtx.watch(), uiCtx.watch()]);

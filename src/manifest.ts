@@ -11,6 +11,11 @@ const manifest: PaperclipPluginManifestV1 = {
   categories: ["automation"],
   capabilities: [
     "projects.read",
+    "agents.read",
+    "agents.invoke",
+    "issues.read",
+    "issues.create",
+    "issues.update",
     "plugin.state.read",
     "plugin.state.write",
     "http.outbound",
@@ -21,7 +26,7 @@ const manifest: PaperclipPluginManifestV1 = {
       {
         type: "detailTab",
         id: MICRONAUT_PROJECT_DETAIL_TAB_ID,
-        displayName: "Micronaut",
+        displayName: "Micronaut branches",
         exportName: "MicronautProjectDetailTab",
         entityTypes: ["project"]
       }

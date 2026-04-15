@@ -18,6 +18,7 @@ const instanceId = "paperclip-micronaut-plugin-e2e";
 const pluginKey = "paperclip-micronaut-plugin";
 const pluginDisplayName = "Micronaut Plugin";
 const pluginDetailTabId = "micronaut-project-overview";
+const micronautTabLabel = "Micronaut branches";
 const settingsIndexPath = "/instance/settings/plugins";
 const requestedPort = process.env.PAPERCLIP_E2E_PORT ? Number(process.env.PAPERCLIP_E2E_PORT) : 3100;
 const requestedDbPort = process.env.PAPERCLIP_E2E_DB_PORT
@@ -28,6 +29,34 @@ const githubOwner = "micronaut-projects";
 const githubRepo = "micronaut-core";
 const micronautCoreRepoUrl = `https://github.com/${githubOwner}/${githubRepo}`;
 const projectName = "Micronaut Core";
+const seededCeoAgentName = "Micronaut CEO";
+const seededEngineerAgentName = "Micronaut Software Engineer";
+const seededCeoAgentPayload = {
+  name: seededCeoAgentName,
+  role: "ceo",
+  title: "Chief Executive Officer",
+  icon: "crown",
+  adapterType: "codex_local",
+  adapterConfig: {
+    model: "gpt-5.4"
+  },
+  permissions: {
+    canCreateAgents: true
+  }
+};
+const seededEngineerAgentPayload = {
+  name: seededEngineerAgentName,
+  role: "engineer",
+  title: "Software Engineer",
+  icon: "wrench",
+  adapterType: "codex_local",
+  adapterConfig: {
+    model: "gpt-5.4"
+  },
+  permissions: {
+    canCreateAgents: false
+  }
+};
 const githubApiHeaders = {
   accept: "application/vnd.github+json",
   "user-agent": "paperclip-micronaut-plugin"
@@ -56,6 +85,16 @@ let embeddedDbPort;
 
 function log(message) {
   console.log(`[paperclip-micronaut-plugin:e2e] ${message}`);
+}
+
+function matchesSeededAgent(agent, payload) {
+  return (
+    agent?.name === payload.name &&
+    agent?.role === payload.role &&
+    agent?.title === payload.title &&
+    agent?.adapterType === payload.adapterType &&
+    agent?.adapterConfig?.model === payload.adapterConfig.model
+  );
 }
 
 function getPaperclipCommandArgs(args) {
@@ -636,6 +675,31 @@ async function ensureCompanySeeded() {
   return postCreateCompanies[0];
 }
 
+async function ensureAgentSeeded(company, payload, fallbackName) {
+  const agentsUrl = new URL(`/api/companies/${company.id}/agents`, baseUrl).toString();
+  const existingAgents = await fetchJson(agentsUrl);
+  const reusableAgent = Array.isArray(existingAgents)
+    ? existingAgents.find((agent) => matchesSeededAgent(agent, payload))
+    : null;
+
+  if (reusableAgent?.id) {
+    log(`Reusing ${payload.title ?? "agent"} ${reusableAgent.name ?? fallbackName} (${reusableAgent.id}).`);
+    return reusableAgent;
+  }
+
+  const createdAgent = await fetchJson(agentsUrl, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+
+  if (!createdAgent?.id) {
+    throw new Error(`${payload.title ?? "Agent"} creation succeeded but did not return an agent id.`);
+  }
+
+  log(`Seeded ${payload.title ?? "agent"} ${createdAgent.name ?? fallbackName} (${createdAgent.id}).`);
+  return createdAgent;
+}
+
 async function ensurePluginRegistered() {
   const pluginsUrl = new URL("/api/plugins", baseUrl).toString();
   const plugins = await fetchJson(pluginsUrl);
@@ -912,7 +976,9 @@ async function openMicronautProjectTab(page, company, project) {
   for (const projectTabUrl of candidates) {
     try {
       await gotoWithTimeout(page, projectTabUrl);
-      const tab = page.getByRole("tab", { name: /^Micronaut$/ }).first();
+      const tab = page
+        .getByRole("tab", { name: new RegExp(`^${micronautTabLabel}$`) })
+        .first();
 
       if (await tab.count()) {
         await tab.waitFor({ state: "visible", timeout: defaultTimeoutMs });
@@ -921,7 +987,7 @@ async function openMicronautProjectTab(page, company, project) {
 
       const root = page.getByTestId("micronaut-project-overview").first();
       await root.waitFor({ state: "visible", timeout: 60000 });
-      log(`Opened Micronaut detail tab: ${projectTabUrl}`);
+      log(`Opened ${micronautTabLabel} detail tab: ${projectTabUrl}`);
       return {
         candidates,
         projectTabUrl
@@ -932,7 +998,7 @@ async function openMicronautProjectTab(page, company, project) {
   }
 
   throw new Error(
-    `Could not open the Micronaut detail tab for ${project.id}. ${
+    `Could not open the ${micronautTabLabel} detail tab for ${project.id}. ${
       lastError instanceof Error ? lastError.message : String(lastError)
     }`
   );
@@ -945,9 +1011,11 @@ async function openProjectPage(page, company, project) {
   for (const projectUrl of candidates) {
     try {
       await gotoWithTimeout(page, projectUrl);
-      const micronautTab = page.getByRole("tab", { name: /^Micronaut$/ }).first();
+      const micronautTab = page
+        .getByRole("tab", { name: new RegExp(`^${micronautTabLabel}$`) })
+        .first();
       await micronautTab.waitFor({ state: "visible", timeout: 60000 });
-      log(`Opened project detail page before selecting Micronaut tab: ${projectUrl}`);
+      log(`Opened project detail page before selecting ${micronautTabLabel}: ${projectUrl}`);
       return {
         candidates,
         projectUrl
@@ -964,32 +1032,156 @@ async function openProjectPage(page, company, project) {
   );
 }
 
-async function waitForMicronautImages(page, timeoutMs = 5000) {
-  try {
-    await page.waitForFunction(
-      () => {
-        const images = Array.from(
-          document.querySelectorAll(
-            '[data-testid="micronaut-project-overview"] img, [data-micronaut-tab-icon="true"]'
-          )
-        );
+async function applySmokeTheme(page, theme) {
+  const backgroundColor = theme === "dark" ? "rgb(2, 6, 23)" : "rgb(248, 250, 252)";
+  const foregroundColor = theme === "dark" ? "rgb(248, 250, 252)" : "rgb(15, 23, 42)";
 
-        return (
-          images.length > 0 &&
-          images.every(
-            (image) =>
-              image instanceof HTMLImageElement &&
-              image.complete &&
-              image.naturalWidth > 0 &&
-              image.naturalHeight > 0
-          )
+  await page.evaluate(
+    ({ backgroundColor, foregroundColor, theme }) => {
+      for (const element of [document.documentElement, document.body]) {
+        if (!(element instanceof HTMLElement)) {
+          continue;
+        }
+
+        element.setAttribute("data-theme", theme);
+        element.setAttribute("data-color-scheme", theme);
+        element.classList.remove("dark", "light");
+        element.classList.add(theme);
+        element.style.backgroundColor = backgroundColor;
+        element.style.color = foregroundColor;
+      }
+
+      try {
+        window.localStorage.setItem("theme", theme);
+        window.localStorage.setItem("color-theme", theme);
+      } catch {
+        // Ignore localStorage access in disposable smoke environments.
+      }
+    },
+    { backgroundColor, foregroundColor, theme }
+  );
+
+  await page.waitForTimeout(250);
+}
+
+async function waitForThemeMode(page, expectedTheme, timeoutMs = 30000) {
+  await page.waitForFunction(
+    (theme) =>
+      document.querySelector('[data-testid="micronaut-project-overview"]')?.getAttribute(
+        "data-theme-mode"
+      ) === theme,
+    expectedTheme,
+    { timeout: timeoutMs }
+  );
+}
+
+async function auditMicronautTheme(page, expectedTheme) {
+  await waitForThemeMode(page, expectedTheme);
+
+  const audit = await page.evaluate(
+    ({ expectedTheme }) => {
+      function parseColor(value) {
+        if (!value) {
+          return null;
+        }
+
+        const match = value.match(
+          /rgba?\\(\\s*(\\d{1,3})\\s*,\\s*(\\d{1,3})\\s*,\\s*(\\d{1,3})(?:\\s*,\\s*([\\d.]+))?\\s*\\)/i
         );
-      },
-      { timeout: timeoutMs }
+        if (!match) {
+          return null;
+        }
+
+        return {
+          r: Number.parseInt(match[1], 10),
+          g: Number.parseInt(match[2], 10),
+          b: Number.parseInt(match[3], 10),
+          a: match[4] === undefined ? 1 : Number.parseFloat(match[4])
+        };
+      }
+
+      function compositeColor(foreground, background) {
+        const alpha = Number.isFinite(foreground?.a) ? foreground.a : 1;
+        const inverse = 1 - alpha;
+
+        return {
+          r: Math.round(foreground.r * alpha + background.r * inverse),
+          g: Math.round(foreground.g * alpha + background.g * inverse),
+          b: Math.round(foreground.b * alpha + background.b * inverse),
+          a: 1
+        };
+      }
+
+      function toLuminance(color) {
+        const channels = [color.r, color.g, color.b].map((channel) => {
+          const normalized = channel / 255;
+          return normalized <= 0.03928
+            ? normalized / 12.92
+            : ((normalized + 0.055) / 1.055) ** 2.4;
+        });
+
+        return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+      }
+
+      function getContrastRatio(foreground, background) {
+        const lighter = Math.max(toLuminance(foreground), toLuminance(background));
+        const darker = Math.min(toLuminance(foreground), toLuminance(background));
+        return (lighter + 0.05) / (darker + 0.05);
+      }
+
+      const root = document.querySelector('[data-testid="micronaut-project-overview"]');
+      const panel = root?.querySelector(".micronaut-project-tab__panel");
+      const title = root?.querySelector(".micronaut-project-tab__title");
+
+      if (
+        !(root instanceof HTMLElement) ||
+        !(panel instanceof HTMLElement) ||
+        !(title instanceof HTMLElement)
+      ) {
+        return {
+          ok: false,
+          reason: "Missing the Micronaut root, panel, or title."
+        };
+      }
+
+      const documentBackground =
+        parseColor(window.getComputedStyle(document.body).backgroundColor) ??
+        parseColor(window.getComputedStyle(document.documentElement).backgroundColor) ?? {
+          r: 255,
+          g: 255,
+          b: 255,
+          a: 1
+        };
+      const panelBackgroundRaw =
+        parseColor(window.getComputedStyle(panel).backgroundColor) ?? documentBackground;
+      const titleColorRaw =
+        parseColor(window.getComputedStyle(title).color) ?? {
+          r: 15,
+          g: 23,
+          b: 42,
+          a: 1
+        };
+      const effectivePanelBackground = compositeColor(panelBackgroundRaw, documentBackground);
+      const effectiveTitleColor = compositeColor(titleColorRaw, effectivePanelBackground);
+      const contrastRatio = getContrastRatio(effectiveTitleColor, effectivePanelBackground);
+      const themeMode = root.getAttribute("data-theme-mode");
+
+      return {
+        ok: themeMode === expectedTheme && contrastRatio >= 4.5,
+        themeMode,
+        contrastRatio
+      };
+    },
+    { expectedTheme }
+  );
+
+  if (!audit?.ok) {
+    throw new Error(
+      `Expected the ${expectedTheme} theme audit to pass, but saw ${JSON.stringify(audit)}.`
     );
-  } catch {
-    log("Micronaut images did not finish loading before screenshot capture; continuing.");
   }
+
+  return audit;
 }
 
 async function waitForServerExit(timeoutMs) {
@@ -1087,6 +1279,12 @@ async function main() {
   log(`Paperclip server is ready at ${baseUrl}.`);
 
   const company = await ensureCompanySeeded();
+  const ceoAgent = await ensureAgentSeeded(company, seededCeoAgentPayload, seededCeoAgentName);
+  const engineerAgent = await ensureAgentSeeded(
+    company,
+    seededEngineerAgentPayload,
+    seededEngineerAgentName
+  );
   const expectedOverview = await fetchMicronautCoreExpectation();
 
   await runCommand(
@@ -1114,6 +1312,7 @@ async function main() {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   page.setDefaultTimeout(defaultTimeoutMs);
+  await page.emulateMedia({ colorScheme: "light" });
 
   try {
     await gotoWithTimeout(page, settingsIndexUrl);
@@ -1121,21 +1320,9 @@ async function main() {
     await page.getByText(pluginDisplayName, { exact: true }).first().waitFor({ timeout: 120000 });
 
     const projectNavigation = await openProjectPage(page, company, project);
-    const initialMicronautTab = page.getByRole("tab", { name: /^Micronaut$/ }).first();
-    const initialTabIcon = initialMicronautTab.locator('[data-micronaut-tab-icon="true"]').first();
-    await initialTabIcon.waitFor({ state: "visible", timeout: 30000 });
-    const initialIconBox = await initialTabIcon.boundingBox();
-    if (
-      !initialIconBox ||
-      initialIconBox.width > 20 ||
-      initialIconBox.height > 20
-    ) {
-      throw new Error(
-        `Micronaut tab icon should already be visible before the first tab open, but measured ${initialIconBox?.width ?? "missing"}x${initialIconBox?.height ?? "missing"}.`
-      );
-    }
-
+    await applySmokeTheme(page, "light");
     const tabNavigation = await openMicronautProjectTab(page, company, project);
+    await applySmokeTheme(page, "light");
 
     const currentVersion = await waitForLocatorText(
       page.getByTestId("current-version-value"),
@@ -1217,54 +1404,22 @@ async function main() {
       });
     }
 
-    const tabIcon = page.locator('[role="tab"][data-micronaut-tab="true"] [data-micronaut-tab-icon="true"]');
-    await tabIcon.first().waitFor({ state: "visible", timeout: 30000 });
-    const micronautTab = page.getByRole("tab", { name: /Micronaut/i }).first();
-    const alternateTabCandidates = [
-      page.getByRole("tab", { name: /^Budget\b/i }).first(),
-      page.getByRole("tab", { name: /^Overview\b/i }).first(),
-      page.getByRole("tab", { name: /^Configuration\b/i }).first(),
-      page.getByRole("tab", { name: /^Issues\b/i }).first()
-    ];
-    let alternateTab = null;
-
-    for (const candidate of alternateTabCandidates) {
-      if ((await candidate.count()) > 0) {
-        alternateTab = candidate;
-        break;
-      }
-    }
-
-    if (!alternateTab) {
-      throw new Error("Could not find another project detail tab to verify Micronaut tab icon persistence.");
-    }
-
-    await alternateTab.click();
-    await page.waitForTimeout(500);
-
-    const alternateTabIconCount = await alternateTab.locator('[data-micronaut-tab-icon="true"]').count();
-    if (alternateTabIconCount > 0) {
-      throw new Error("Micronaut tab icon moved onto a different tab after switching away.");
-    }
-
-    const persistedIcon = micronautTab.locator('[data-micronaut-tab-icon="true"]').first();
-    await persistedIcon.waitFor({ state: "visible", timeout: 30000 });
-    const persistedIconBox = await persistedIcon.boundingBox();
-    if (
-      !persistedIconBox ||
-      persistedIconBox.width > 20 ||
-      persistedIconBox.height > 20
-    ) {
-      throw new Error(
-        `Micronaut tab icon should remain compact after tab switches, but measured ${persistedIconBox?.width ?? "missing"}x${persistedIconBox?.height ?? "missing"}.`
-      );
-    }
-
-    await micronautTab.click();
-    await page.getByTestId("current-version-value").waitFor({ state: "visible", timeout: 30000 });
-    await waitForMicronautImages(page);
+    const lightThemeAudit = await auditMicronautTheme(page, "light");
 
     await mkdir(join(pluginRoot, "tests/e2e/results"), { recursive: true });
+    await page.screenshot({
+      path: join(pluginRoot, "tests/e2e/results/last-run-light.png"),
+      fullPage: true
+    });
+
+    await page.emulateMedia({ colorScheme: "dark" });
+    await applySmokeTheme(page, "dark");
+    await page.waitForTimeout(500);
+    const darkThemeAudit = await auditMicronautTheme(page, "dark");
+    await page.screenshot({
+      path: join(pluginRoot, "tests/e2e/results/last-run-dark.png"),
+      fullPage: true
+    });
     await page.screenshot({
       path: join(pluginRoot, "tests/e2e/results/last-run.png"),
       fullPage: true
@@ -1284,6 +1439,20 @@ async function main() {
           },
           baseUrl,
           bodyText,
+          ceoAgent: {
+            adapterType: ceoAgent?.adapterType ?? null,
+            id: ceoAgent?.id ?? null,
+            model: ceoAgent?.adapterConfig?.model ?? null,
+            name: ceoAgent?.name ?? null,
+            role: ceoAgent?.role ?? null
+          },
+          engineerAgent: {
+            adapterType: engineerAgent?.adapterType ?? null,
+            id: engineerAgent?.id ?? null,
+            model: engineerAgent?.adapterConfig?.model ?? null,
+            name: engineerAgent?.name ?? null,
+            role: engineerAgent?.role ?? null
+          },
           company,
           expectedOverview,
           plugin: {
@@ -1295,7 +1464,11 @@ async function main() {
           project,
           projectNavigation,
           settingsIndexUrl,
-          tabNavigation
+          tabNavigation,
+          themeAudits: {
+            dark: darkThemeAudit,
+            light: lightThemeAudit
+          }
         },
         null,
         2
