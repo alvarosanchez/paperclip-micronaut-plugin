@@ -26,6 +26,7 @@ import plugin from "../src/worker.js";
 const require = createRequire(import.meta.url);
 const packageJson = require("../package.json") as { version?: unknown };
 const itWithFakeGh = process.platform === "win32" ? it.skip : it;
+const itWithSymlink = process.platform === "win32" ? it.skip : it;
 
 function createProject(repoUrl: string): Project {
   return {
@@ -449,7 +450,7 @@ describe("micronaut project detail tab", () => {
     expect(normalizeManifestVersion(packageJson.version)).toBe(packageJson.version);
   });
 
-  it("matches symlinked worker entrypoints to the real worker file", async () => {
+  itWithSymlink("matches symlinked worker entrypoints to the real worker file", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "paperclip-micronaut-plugin-worker-path-"));
     const realWorkerPath = join(tempDir, "worker.js");
     const symlinkWorkerPath = join(tempDir, "worker-symlink.js");
@@ -460,6 +461,24 @@ describe("micronaut project detail tab", () => {
 
       expect(
         workerModule.shouldStartWorkerHost(pathToFileURL(realWorkerPath).href, symlinkWorkerPath)
+      ).toBe(true);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("matches file URL worker entrypoints to the real worker file", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "paperclip-micronaut-plugin-worker-path-"));
+    const realWorkerPath = join(tempDir, "worker.js");
+
+    try {
+      await writeFile(realWorkerPath, "// test worker entrypoint\n");
+
+      expect(
+        workerModule.shouldStartWorkerHost(
+          pathToFileURL(realWorkerPath).href,
+          pathToFileURL(realWorkerPath).href
+        )
       ).toBe(true);
     } finally {
       await rm(tempDir, { recursive: true, force: true });

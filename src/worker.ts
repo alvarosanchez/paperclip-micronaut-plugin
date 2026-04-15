@@ -2005,11 +2005,20 @@ export function shouldStartWorkerHost(moduleUrl: string, entry = process.argv[1]
   }
 
   const modulePath = fileURLToPath(moduleUrl);
+  let entryPath = entry;
+
+  if (entry.startsWith("file:")) {
+    try {
+      entryPath = fileURLToPath(new URL(entry));
+    } catch {
+      entryPath = entry;
+    }
+  }
 
   try {
-    return realpathSync(entry) === realpathSync(modulePath);
+    return realpathSync(entryPath) === realpathSync(modulePath);
   } catch {
-    return resolve(entry) === resolve(modulePath);
+    return resolve(entryPath) === resolve(modulePath);
   }
 }
 
