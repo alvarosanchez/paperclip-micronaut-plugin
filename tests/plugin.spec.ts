@@ -5,7 +5,7 @@ import { delimiter, join } from "node:path";
 import type { Agent, Project } from "@paperclipai/plugin-sdk";
 import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import manifest from "../src/manifest.js";
+import manifest, { normalizeManifestVersion } from "../src/manifest.js";
 import {
   MICRONAUT_CREATE_BRANCH_ACTION_KEY,
   MICRONAUT_MERGE_UP_STATE_DATA_KEY,
@@ -435,6 +435,16 @@ describe("micronaut project detail tab", () => {
       ],
       warnings: []
     });
+  });
+
+  it("normalizes manifest versions from release-style environment variables", () => {
+    expect(normalizeManifestVersion("v1.2.3")).toBe("1.2.3");
+  });
+
+  it("rejects invalid manifest versions so callers can fall back safely", () => {
+    expect(normalizeManifestVersion("not-a-version")).toBeNull();
+    expect(normalizeManifestVersion("")).toBeNull();
+    expect(normalizeManifestVersion(packageJson.version)).toBe(packageJson.version);
   });
 
   itWithFakeGh("falls back to gh for GitHub metadata when GitHub API rate limits", async () => {

@@ -4,10 +4,25 @@ import { MICRONAUT_PROJECT_DETAIL_TAB_ID } from "./micronaut.js";
 
 const require = createRequire(import.meta.url);
 const packageJson = require("../package.json") as { version?: unknown };
+
+function normalizeManifestVersion(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const normalized = trimmed.replace(/^v(?=\d)/i, "");
+  return /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(normalized) ? normalized : null;
+}
+
 const MANIFEST_VERSION =
-  process.env.PLUGIN_VERSION?.trim() ||
-  (typeof packageJson.version === "string" && packageJson.version.trim()) ||
-  process.env.npm_package_version?.trim() ||
+  normalizeManifestVersion(process.env.PLUGIN_VERSION) ||
+  normalizeManifestVersion(packageJson.version) ||
+  normalizeManifestVersion(process.env.npm_package_version) ||
   "0.0.0-dev";
 
 const manifest: PaperclipPluginManifestV1 = {
@@ -47,4 +62,5 @@ const manifest: PaperclipPluginManifestV1 = {
   }
 };
 
+export { normalizeManifestVersion };
 export default manifest;
