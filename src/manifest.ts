@@ -1,12 +1,21 @@
+import { createRequire } from "node:module";
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 import { MICRONAUT_PROJECT_DETAIL_TAB_ID } from "./micronaut.js";
+
+const require = createRequire(import.meta.url);
+const packageJson = require("../package.json") as { version?: unknown };
+const MANIFEST_VERSION =
+  process.env.PLUGIN_VERSION?.trim() ||
+  (typeof packageJson.version === "string" && packageJson.version.trim()) ||
+  process.env.npm_package_version?.trim() ||
+  "0.0.0-dev";
 
 const manifest: PaperclipPluginManifestV1 = {
   id: "paperclip-micronaut-plugin",
   apiVersion: 1,
-  version: "0.1.0",
+  version: MANIFEST_VERSION,
   displayName: "Micronaut Plugin",
-  description: "Project detail tab with Micronaut release, branch, and version metadata.",
+  description: "Micronaut release-branch dashboard and merge-up automation for Paperclip projects.",
   author: "Alvaro Sanchez-Mariscal",
   categories: ["automation"],
   capabilities: [

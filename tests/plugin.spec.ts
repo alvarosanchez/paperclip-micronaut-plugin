@@ -1,4 +1,5 @@
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import type { Agent, Project } from "@paperclipai/plugin-sdk";
@@ -20,6 +21,8 @@ import {
 } from "../src/micronaut.js";
 import plugin from "../src/worker.js";
 
+const require = createRequire(import.meta.url);
+const packageJson = require("../package.json") as { version?: unknown };
 const itWithFakeGh = process.platform === "win32" ? it.skip : it;
 
 function createProject(repoUrl: string): Project {
@@ -315,6 +318,7 @@ describe("micronaut project detail tab", () => {
 
     await expect(plugin.definition.setup(harness.ctx)).resolves.toBeUndefined();
 
+    expect(manifest.version).toBe(packageJson.version);
     expect(manifest.capabilities).toEqual([
       "projects.read",
       "agents.read",
