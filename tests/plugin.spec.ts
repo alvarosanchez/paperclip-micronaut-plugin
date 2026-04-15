@@ -1,7 +1,8 @@
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { Agent, Project } from "@paperclipai/plugin-sdk";
 import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,6 +20,7 @@ import {
   type MicronautStartMergeUpResult,
   type MicronautProjectOverview
 } from "../src/micronaut.js";
+import * as workerModule from "../src/worker.js";
 import plugin from "../src/worker.js";
 
 const require = createRequire(import.meta.url);
@@ -447,7 +449,41 @@ describe("micronaut project detail tab", () => {
     expect(normalizeManifestVersion(packageJson.version)).toBe(packageJson.version);
   });
 
-  itWithFakeGh("falls back to gh for GitHub metadata when GitHub API rate limits", async () => {
+  it("matches symlinked worker entrypoints to the real worker file", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "paperclip-micronaut-plugin-worker-path-"));
+    const realWorkerPath = join(tempDir, "worker.js");
+    const symlinkWorkerPath = join(tempDir, "worker-symlink.js");
+
+    try {
+      await writeFile(realWorkerPath, "// test worker entrypoint\n");
+      await symlink(realWorkerPath, symlinkWorkerPath);
+
+      expect(
+        workerModule.shouldStartWorkerHost(pathToFileURL(realWorkerPath).href, symlinkWorkerPath)
+      ).toBe(true);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unrelated worker entrypoints", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "paperclip-micronaut-plugin-worker-path-"));
+    const realWorkerPath = join(tempDir, "worker.js");
+    const unrelatedWorkerPath = join(tempDir, "other-worker.js");
+
+    try {
+      await writeFile(realWorkerPath, "// test worker entrypoint\n");
+      await writeFile(unrelatedWorkerPath, "// different worker entrypoint\n");
+
+      expect(
+        workerModule.shouldStartWorkerHost(pathToFileURL(realWorkerPath).href, unrelatedWorkerPath)
+      ).toBe(false);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  itWithFakeGh("surfaces gh remediation when rate-limited GitHub metadata cannot fall back to gh", async () => {
     global.fetch = vi.fn(async (input) => {
       const url = String(input);
 

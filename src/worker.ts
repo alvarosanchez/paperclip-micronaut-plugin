@@ -1,10 +1,12 @@
 import { execFile } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { userInfo } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
   definePlugin,
-  runWorker,
+  startWorkerRpcHost,
   type PluginContext
 } from "@paperclipai/plugin-sdk";
 import {
@@ -1997,6 +1999,20 @@ async function createMicronautBranch(
   };
 }
 
+export function shouldStartWorkerHost(moduleUrl: string, entry = process.argv[1]): boolean {
+  if (typeof entry !== "string" || !entry.trim()) {
+    return false;
+  }
+
+  const modulePath = fileURLToPath(moduleUrl);
+
+  try {
+    return realpathSync(entry) === realpathSync(modulePath);
+  } catch {
+    return resolve(entry) === resolve(modulePath);
+  }
+}
+
 const plugin = definePlugin({
   async setup(ctx) {
     ctx.data.register(MICRONAUT_PROJECT_OVERVIEW_DATA_KEY, async (params) =>
@@ -2021,4 +2037,7 @@ const plugin = definePlugin({
 });
 
 export default plugin;
-runWorker(plugin, import.meta.url);
+
+if (shouldStartWorkerHost(import.meta.url)) {
+  startWorkerRpcHost({ plugin });
+}
