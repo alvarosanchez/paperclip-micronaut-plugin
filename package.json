@@ -62,7 +62,7 @@
     "@types/react": "^19.0.8",
     "@types/react-dom": "^19.2.3",
     "esbuild": "^0.28.0",
-    "lucide-react": "^0.577.0",
+    "lucide-react": "^1.0.0",
     "playwright": "1.59.1",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
