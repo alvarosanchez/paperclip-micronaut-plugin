@@ -2,13 +2,36 @@
   "name": "paperclip-micronaut-plugin",
   "version": "0.1.0",
   "type": "module",
-  "private": true,
-  "description": "Paperclip project detail tab for Micronaut release, branch, and version metadata.",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "description": "Micronaut release-branch dashboard and merge-up automation for Paperclip projects.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alvarosanchez/paperclip-micronaut-plugin.git"
+  },
+  "homepage": "https://github.com/alvarosanchez/paperclip-micronaut-plugin#readme",
+  "bugs": {
+    "url": "https://github.com/alvarosanchez/paperclip-micronaut-plugin/issues"
+  },
+  "files": [
+    "dist/manifest.js",
+    "dist/worker.js",
+    "dist/ui/index.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "node ./esbuild.config.mjs",
     "build:rollup": "rollup -c",
     "dev": "node ./esbuild.config.mjs --watch",
     "dev:ui": "paperclip-plugin-dev-server --root . --ui-dir dist/ui --port 4177",
+    "prepack": "pnpm build",
+    "release:sync-version": "node ./scripts/sync-release-version.mjs",
     "test": "vitest run --config ./vitest.config.ts",
     "test:e2e": "pnpm build && pnpm exec playwright install chromium && node ./scripts/e2e/run-paperclip-smoke.mjs",
     "typecheck": "tsc --noEmit",
@@ -25,7 +48,7 @@
     "micronaut",
     "automation"
   ],
-  "author": "Alvaro Sanchez-Mariscal <alvaro.sanchez-mariscal@oracle.com>",
+  "author": "Alvaro Sanchez-Mariscal",
   "license": "MIT",
   "peerDependencies": {
     "react": ">=18",

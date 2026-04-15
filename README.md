@@ -1,140 +1,105 @@
 # Micronaut Plugin
 
-Paperclip plugin that adds a Micronaut-focused project `detailTab`.
+[![CI](https://img.shields.io/github/actions/workflow/status/alvarosanchez/paperclip-micronaut-plugin/ci.yml?branch=main&label=ci)](https://github.com/alvarosanchez/paperclip-micronaut-plugin/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/actions/workflow/status/alvarosanchez/paperclip-micronaut-plugin/release.yml?label=release)](https://github.com/alvarosanchez/paperclip-micronaut-plugin/actions/workflows/release.yml)
+[![Node >=20](https://img.shields.io/badge/node-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![pnpm 10](https://img.shields.io/badge/pnpm-10-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-The tab is meant for Paperclip projects backed by repositories in the
-`micronaut-projects` GitHub organization and shows release-oriented signals for
-the active project:
+Micronaut-focused Paperclip plugin that turns a project detail tab into a release cockpit: see the current and next version at a glance, inspect the default and upcoming release branches, create missing branches, and kick off merge-up work from inside Paperclip.
 
-- Current version: the latest GitHub release tag, normalized to a plain version
-  string such as `3.0.0`
-- Next version: derived from `projectVersion` in the repository root
-  `gradle.properties` on the repository default branch, with `-SNAPSHOT`
-  removed
-- Branches: the repository default branch plus the next minor and next major
-  release branches derived from it, including last-updated timestamps and
-  ahead/behind status relative to the default branch when those branches exist,
-  branch-local `projectVersion` checks against the expected `X.Y.0-SNAPSHOT`
-  release version, a live `Create branch` action for missing upcoming branches,
-  a live AI-assisted `Merge up` action for behind branches with a remembered
-  company-wide agent choice that creates a real Paperclip issue in `todo`,
-  keeps the row linked to that issue with its native status icon until it
-  closes, and shows the GitHub PR once the assigned agent comments with that PR
-  URL on the issue,
-  and a preview-only `Set default` action for eligible branches so maintainers
-  can still verify the exact GitHub and version workflow before the
-  destructive default-branch switch ships
-- Cache: the project overview is cached in Paperclip plugin state and shows a
-  `Last checked ...` timestamp plus a manual refresh control so reopening the
-  tab does not re-fetch GitHub data every time
+## What You Get
 
-The `Create branch` button creates the missing branch directly from the
-Paperclip host by using the
-local GitHub CLI, `gh`, against the repository default branch. If `gh` is not
-installed or not authenticated on the host, the tab reports that clearly when
-you click the button.
+- A project-scoped **Micronaut branches** detail tab for repositories in the `micronaut-projects` GitHub organization
+- Current version from the latest GitHub release tag, normalized to plain semver
+- Next version derived from `projectVersion` in the repository's `gradle.properties`
+- Branch rows for the default branch plus the next minor and next major release lines
+- Ahead/behind, diverged, missing, and version-alignment signals for each tracked branch
+- A one-click **Create branch** action for missing upcoming branches
+- A **Merge up** workflow that creates a real Paperclip issue and assigns it to a selected agent
+- Cached project snapshots with a **Last checked** indicator and manual refresh
+
+## Requirements
+
+- Node.js 20 or newer
+- A Paperclip instance with plugin support
+- A Paperclip project backed by a GitHub repository in the `micronaut-projects` organization
+- Outbound access to the GitHub API from the plugin worker
+- `gh` installed and authenticated on the Paperclip host if you want host-side branch creation and the GitHub CLI fallback path
+
+## Install
+
+Install the published package into Paperclip:
+
+```bash
+paperclipai plugin install paperclip-micronaut-plugin
+```
+
+Pin a specific npm version if needed:
+
+```bash
+paperclipai plugin install paperclip-micronaut-plugin --version <version>
+```
+
+Install from a local checkout during development:
+
+```bash
+paperclipai plugin install --local .
+```
+
+## Quick Start
+
+1. Install the plugin in Paperclip.
+2. Open a Paperclip project whose repository lives under `micronaut-projects`.
+3. Open the **Micronaut branches** detail tab on that project.
+4. Review the current version, next version, and branch health for the default, next minor, and next major lines.
+5. Use **Refresh** to pull a fresh snapshot when needed.
+6. Use **Create branch** when an expected future line does not exist yet.
+7. Use **Merge up** to create and assign a Paperclip issue that tracks the merge from one branch into the next.
+
+## How It Works
+
+The tab combines GitHub repository metadata with Paperclip-native workflow state:
+
+- **Current version** comes from the latest GitHub release tag.
+- **Next version** comes from `projectVersion` in the repository root `gradle.properties` on the default branch.
+- **Branch cards** show last-updated data, ahead/behind status, and whether `projectVersion` matches the expected release-line value such as `4.2.0-SNAPSHOT`.
+- **Create branch** uses the GitHub CLI on the Paperclip host so branch creation happens with the operator's existing GitHub auth.
+- **Merge up** creates a real Paperclip issue in `todo`, remembers the preferred assignee per company, and keeps the row linked to the issue until it closes.
+- **PR chips** appear when the assigned agent comments on that issue with a GitHub pull request URL.
+
+For unsupported repositories, the hosted tab stays out of the way instead of rendering misleading fallback chrome.
+
+## Security And Privacy
+
+- The plugin only requests the capabilities it needs for project reads, agent reads/invocation, issue reads/writes, plugin state, outbound HTTP, and the hosted detail tab registration.
+- Repository metadata is fetched from GitHub and cached in Paperclip plugin state to avoid unnecessary repeat requests.
+- The plugin shells out to `gh` with explicit argv arguments instead of a shell command string, which reduces command-injection risk.
+- `gh` is only needed for host-side branch creation and recoverable GitHub API fallback calls.
+- Merge-up tracking stores lightweight operational metadata in plugin state and uses native Paperclip issues for the actual work item.
 
 ## Development
 
+From the repository root:
+
 ```bash
 pnpm install
-pnpm dev
-pnpm dev:ui
 pnpm typecheck
 pnpm test
 pnpm build
 ```
 
-## Install Into Paperclip
+Additional verification commands:
 
-```bash
-curl -X POST http://127.0.0.1:3100/api/plugins/install \
-  -H "Content-Type: application/json" \
-  -d '{"packageName":"/Users/alvaro/Dev/alvarosanchez/paperclip-micronaut-plugin","isLocalPath":true}'
-```
+- `pnpm test:e2e` for the headless Paperclip smoke flow
+- `pnpm verify:manual` for an interactive local verification run
 
-## Plugin Contract
+## Release
 
-- `src/manifest.ts` declares a single project-scoped `detailTab` named
-  `Micronaut branches`
-- `src/worker.ts` registers one read model,
-  `micronaut.project-overview`, caches supported project snapshots in
-  project-scoped plugin state, and exposes the
-  `micronaut.refresh-project-overview`, `micronaut.create-branch`,
-  `micronaut.merge-up-state`, `micronaut.set-merge-up-agent`, and
-  `micronaut.start-merge-up` contracts for explicit refreshes, host-side GitHub
-  CLI branch creation, company-scoped merge-up agent preferences, and
-  project-scoped tracked merge-up issue persistence; it also derives
-  branch-local `projectVersion` expectations from the GitHub contents API with
-  `gh api` fallback for recoverable transport failures, creates a real
-  Paperclip issue assigned to the selected agent and immediately moves it to
-  `todo`, then hydrates the tracked issue ids back into the merge-up read
-  model, plus merge-up and set-default eligibility for the hosted UI
-- `src/ui/index.tsx` renders a compact hosted Paperclip tab with Paperclip-native
-  sections for version and branch data, a cached `Last checked ...` indicator,
-  a refresh control, GitHub-style ahead/behind pills, project-version status
-  notes, partial-failure warnings, inline create-branch mutations backed by the
-  worker without replacing the whole tab with a loading screen, a merge-up
-  picker that mirrors Paperclip's native assignee chooser, active merge-up rows
-  that link to the Paperclip issue plus status icon, and GitHub PR chips when
-  the assigned agent comments with a PR URL on that issue
-- `src/micronaut.ts` contains the shared repo/version parsing helpers used by
-  the worker and tests
+- Pull requests and pushes to `main` run GitHub Actions CI for typecheck, tests, build, and `npm pack --dry-run`.
+- Published GitHub releases trigger the npm publish workflow.
+- The release workflow derives the package version from the GitHub tag, writes that version into `package.json`, verifies the publish surface, and then publishes with provenance enabled.
 
-For non-Micronaut repositories, the hosted tab returns `null` instead of
-rendering fallback chrome.
+## License
 
-## Verification
-
-Run the smallest relevant scope first:
-
-```bash
-pnpm typecheck
-pnpm test
-pnpm build
-```
-
-Use these when the hosted Paperclip flow changes:
-
-- `pnpm test:e2e`
-  Builds the plugin, boots an isolated Paperclip instance, installs the plugin,
-  creates a disposable `Dummy Company` with seeded `Micronaut CEO` and
-  `Micronaut Software Engineer` agents using `codex_local` + `gpt-5.4`,
-  creates a disposable `Micronaut Core` project backed by
-  `https://github.com/micronaut-projects/micronaut-core`, opens the
-  `Micronaut branches` tab headlessly, and verifies the rendered current
-  version, next version, branch rows, last-updated labels, the cached
-  `Last checked ...` status, the manual refresh control, ahead/behind status
-  pills or `Create` branch actions for missing upcoming branches, native
-  merge-up issue chips, and readable title-to-surface contrast against live
-  host and GitHub data. This smoke flow stays read-only against
-  `micronaut-core`.
-- `pnpm verify:manual`
-  Builds the plugin, boots a local Paperclip instance, installs the plugin,
-  creates or reuses a `Micronaut Core` project plus company-scoped
-  `Micronaut CEO` and `Micronaut Software Engineer` agents configured with
-  `codex_local` + `gpt-5.4`, and opens the `Micronaut branches` tab in your
-  browser. Confirm the tab content shows the latest GitHub release version, the
-  next version derived from `gradle.properties`, a `Last checked ...` status
-  with a refresh button, and branch rows for the default, next minor, and next
-  major branches with last-updated values, ahead/behind-style status pills, and
-  project-version notes. If an upcoming branch does not exist yet, the row
-  should show a `Create branch` action instead, and creating it should update
-  the tab in place rather than replacing the whole surface with a loading
-  state. When a branch is behind the default branch, the row should show a live
-  `Merge up` action with the same assignee-picker style as native Paperclip
-  issues: on first use it should ask you to choose an agent, then it should
-  remember that agent for the company, create a real Paperclip issue in `todo`
-  assigned to that agent, and replace the button with a link to that issue plus
-  its Paperclip status icon until the issue is closed. If the agent comments on
-  that issue with a GitHub PR URL, the branch row should also surface a `PR #...`
-  chip that opens the PR. When a branch is not behind, the row should show a
-  preview-only `Set default` action with exact branch and version text in the
-  dialog. Verify both light and dark themes for readability. To exercise the live
-  create-branch and merge-up flows, make sure `gh` is installed and
-  authenticated on the Paperclip host with access to the target repository. The
-  script also prints the installed-plugins settings URL for a quick manifest
-  check.
-
-The smoke test writes light-theme, dark-theme, and latest screenshots plus a
-metadata snapshot to `tests/e2e/results/`.
+[MIT](./LICENSE)

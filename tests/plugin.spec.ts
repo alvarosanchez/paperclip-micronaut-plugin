@@ -1,10 +1,11 @@
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import type { Agent, Project } from "@paperclipai/plugin-sdk";
 import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import manifest from "../src/manifest.js";
+import manifest, { normalizeManifestVersion } from "../src/manifest.js";
 import {
   MICRONAUT_CREATE_BRANCH_ACTION_KEY,
   MICRONAUT_MERGE_UP_STATE_DATA_KEY,
@@ -20,6 +21,8 @@ import {
 } from "../src/micronaut.js";
 import plugin from "../src/worker.js";
 
+const require = createRequire(import.meta.url);
+const packageJson = require("../package.json") as { version?: unknown };
 const itWithFakeGh = process.platform === "win32" ? it.skip : it;
 
 function createProject(repoUrl: string): Project {
@@ -315,6 +318,7 @@ describe("micronaut project detail tab", () => {
 
     await expect(plugin.definition.setup(harness.ctx)).resolves.toBeUndefined();
 
+    expect(manifest.version).toBe(packageJson.version);
     expect(manifest.capabilities).toEqual([
       "projects.read",
       "agents.read",
@@ -431,6 +435,16 @@ describe("micronaut project detail tab", () => {
       ],
       warnings: []
     });
+  });
+
+  it("normalizes manifest versions from release-style environment variables", () => {
+    expect(normalizeManifestVersion("v1.2.3")).toBe("1.2.3");
+  });
+
+  it("rejects invalid manifest versions so callers can fall back safely", () => {
+    expect(normalizeManifestVersion("not-a-version")).toBeNull();
+    expect(normalizeManifestVersion("")).toBeNull();
+    expect(normalizeManifestVersion(packageJson.version)).toBe(packageJson.version);
   });
 
   itWithFakeGh("falls back to gh for GitHub metadata when GitHub API rate limits", async () => {
