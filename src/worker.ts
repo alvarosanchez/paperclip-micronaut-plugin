@@ -648,7 +648,10 @@ function buildPaperclipApiIssueCommentsUrl(issueRef: string): string | null {
   }
 }
 
-async function fetchIssueCommentsViaPaperclipApi(issueRef: string): Promise<MicronautIssueComment[]> {
+async function fetchIssueCommentsViaPaperclipApi(
+  ctx: PluginContext,
+  issueRef: string
+): Promise<MicronautIssueComment[]> {
   const url = buildPaperclipApiIssueCommentsUrl(issueRef);
   if (!url) {
     return [];
@@ -662,7 +665,7 @@ async function fetchIssueCommentsViaPaperclipApi(issueRef: string): Promise<Micr
     headers.set("authorization", `Bearer ${apiKey}`);
   }
 
-  const response = await fetch(url, {
+  const response = await ctx.http.fetch(url, {
     headers
   });
   const bodyText = await response.text();
@@ -692,7 +695,7 @@ async function fetchJson<T>(ctx: PluginContext, url: string, init: RequestInit =
         throw ghError;
       }
 
-      if (isGitHubApiRateLimitError(error)) {
+      if (error instanceof HttpRequestError) {
         throw new GitHubCliFallbackError(error, ghError);
       }
 
@@ -702,7 +705,8 @@ async function fetchJson<T>(ctx: PluginContext, url: string, init: RequestInit =
 }
 
 function decodeGitHubContentFile(response: GitHubContentFileResponse, description: string): string {
-  if (response.type?.trim() && response.type !== "file") {
+  const type = response.type?.trim().toLowerCase() ?? "";
+  if (type && type !== "file") {
     throw new Error(`${description} is not a file.`);
   }
 
@@ -1466,7 +1470,7 @@ async function buildMergeUpIssueSnapshot(
   if (!pullRequestUrl) {
     const issueRef = identifier || hostIssue.id;
     try {
-      const fallbackComments = await fetchIssueCommentsViaPaperclipApi(issueRef);
+      const fallbackComments = await fetchIssueCommentsViaPaperclipApi(ctx, issueRef);
       pullRequestUrl = extractPullRequestUrlFromComments(fallbackComments);
     } catch (error) {
       ctx.logger.warn("Could not load Micronaut merge-up issue comments from the Paperclip API.", {
