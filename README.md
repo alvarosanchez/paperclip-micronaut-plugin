@@ -16,13 +16,13 @@ Micronaut-focused Paperclip plugin that turns a project detail tab into a releas
 - Branch rows for the default branch plus the next minor and next major release lines
 - Ahead/behind, diverged, missing, and version-alignment signals for each tracked branch
 - A one-click **Create branch** action for missing upcoming branches
-- A **Merge up** workflow that creates a real Paperclip issue and assigns it to a selected agent
+- A **Merge up** workflow that creates a real Paperclip issue, assigns it to a selected agent, and requests a Paperclip-managed assignment wakeup
 - Cached project snapshots with a **Last checked** indicator and manual refresh
 
 ## Requirements
 
 - Node.js 20 or newer
-- A Paperclip instance with plugin support
+- A Paperclip instance with plugin support, version `2026.427.0` or newer
 - A Paperclip project backed by a GitHub repository in the `micronaut-projects` organization
 - Outbound access to the GitHub API from the plugin worker
 - `gh` installed and authenticated on the Paperclip host if you want host-side branch creation and the GitHub CLI fallback path
@@ -65,18 +65,19 @@ The tab combines GitHub repository metadata with Paperclip-native workflow state
 - **Next version** comes from `projectVersion` in the repository root `gradle.properties` on the default branch.
 - **Branch cards** show last-updated data, ahead/behind status, and whether `projectVersion` matches the expected release-line value such as `4.2.0-SNAPSHOT`.
 - **Create branch** uses the GitHub CLI on the Paperclip host so branch creation happens with the operator's existing GitHub auth.
-- **Merge up** creates a real Paperclip issue in `todo`, remembers the preferred assignee per company, and keeps the row linked to the issue until it closes.
+- **Merge up** creates a real Paperclip issue in `todo`, stamps it with Micronaut plugin origin and billing metadata, remembers the preferred assignee per company, and keeps the row linked to the issue until it closes.
+- **Assignment wakeups** use Paperclip's issue wakeup API so scheduler, blocker, budget, and liveness checks stay in the host workflow instead of bypassing it with a direct agent invocation.
 - **PR chips** appear when the assigned agent comments on that issue with a GitHub pull request URL.
 
 For unsupported repositories, the hosted tab stays out of the way instead of rendering misleading fallback chrome.
 
 ## Security And Privacy
 
-- The plugin only requests the capabilities it needs for project reads, agent reads/invocation, issue reads/writes, plugin state, outbound HTTP, and the hosted detail tab registration.
+- The plugin only requests the capabilities it needs for project reads, agent reads, issue reads/creation/wakeups, plugin state, outbound HTTP, and the hosted detail tab registration.
 - Repository metadata is fetched from GitHub and cached in Paperclip plugin state to avoid unnecessary repeat requests.
 - The plugin shells out to `gh` with explicit argv arguments instead of a shell command string, which reduces command-injection risk.
 - `gh` is only needed for host-side branch creation and recoverable GitHub API fallback calls.
-- Merge-up tracking stores lightweight operational metadata in plugin state and uses native Paperclip issues for the actual work item.
+- Merge-up tracking stores lightweight operational metadata in plugin state and uses native Paperclip issues plus host-owned assignment wakeups for the actual work item.
 
 ## Development
 
@@ -93,6 +94,8 @@ Additional verification commands:
 
 - `pnpm test:e2e` for the headless Paperclip smoke flow
 - `pnpm verify:manual` for an interactive local verification run
+
+Both verification harnesses seed their test agents through Paperclip's board-governed hire flow and approve pending hires before installing the local plugin.
 
 ## Release
 

@@ -1,12 +1,10 @@
 import { execFile } from "node:child_process";
-import { realpathSync } from "node:fs";
 import { userInfo } from "node:os";
-import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import {
   definePlugin,
-  startWorkerRpcHost,
+  runWorker,
   type PluginContext
 } from "@paperclipai/plugin-sdk";
 import {
@@ -57,6 +55,8 @@ const MICRONAUT_STATE_NAMESPACE = "micronaut";
 const MICRONAUT_PROJECT_OVERVIEW_CACHE_STATE_KEY = "project-overview-cache";
 const MICRONAUT_COMPANY_SETTINGS_STATE_KEY = "company-settings";
 const MICRONAUT_PROJECT_MERGE_UP_STATE_KEY = "merge-up-issues";
+const MICRONAUT_MERGE_UP_BILLING_CODE = "micronaut:merge-up";
+const MICRONAUT_MERGE_UP_CONTEXT_SOURCE = "paperclip-micronaut-plugin.merge-up";
 const MICRONAUT_PROJECT_OVERVIEW_CACHE_TTL_MS = 10 * 60 * 1000;
 const GH_EXECUTABLE_CANDIDATES =
   process.platform === "win32"
@@ -1684,23 +1684,23 @@ function buildMergeUpIssueDescription(input: {
     .join("\n");
 }
 
-function buildMergeUpIssueWakePrompt(input: {
-  issueIdentifier: string;
-  issueTitle: string;
-  projectName: string;
-  repoFullName: string;
+function buildMergeUpIssueOriginKind(pluginId: string): `plugin:${string}` {
+  return `plugin:${pluginId}:merge-up`;
+}
+
+function buildMergeUpIssueOriginId(input: {
+  projectId: string;
   sourceBranch: string;
   targetBranch: string;
 }): string {
-  return [
-    `You were just assigned Paperclip issue ${input.issueIdentifier}: ${input.issueTitle}.`,
-    `Project: ${input.projectName}`,
-    `Repository: ${input.repoFullName}`,
-    "",
-    "Open your assigned issue queue, pick up that issue immediately, and follow the issue instructions as the source of truth.",
-    `This work is the Micronaut merge up from \`${input.sourceBranch}\` into \`${input.targetBranch}\`.`,
-    "If another run is already active, make sure this issue is still on your radar as the next queued task."
-  ].join("\n");
+  return `${input.projectId}:${input.sourceBranch}->${input.targetBranch}`;
+}
+
+function buildMergeUpWakeupReason(input: {
+  sourceBranch: string;
+  targetBranch: string;
+}): string {
+  return `Micronaut merge-up assigned: ${input.sourceBranch} -> ${input.targetBranch}`;
 }
 
 async function startMicronautMergeUp(
@@ -1802,6 +1802,11 @@ async function startMicronautMergeUp(
     }
   }
 
+  const originId = buildMergeUpIssueOriginId({
+    projectId,
+    sourceBranch,
+    targetBranch
+  });
   const createdIssue = await ctx.issues.create({
     companyId,
     projectId,
@@ -1818,39 +1823,24 @@ async function startMicronautMergeUp(
       targetBranchProjectVersion: branchSummary.projectVersion,
       targetBranchVersionStatus: branchSummary.versionStatus
     }),
+    status: "todo",
     priority: "medium",
-    assigneeAgentId: agent.id
+    assigneeAgentId: agent.id,
+    originKind: buildMergeUpIssueOriginKind(ctx.manifest.id),
+    originId,
+    billingCode: MICRONAUT_MERGE_UP_BILLING_CODE
   });
-
-  let liveIssue = createdIssue;
-  try {
-    liveIssue = await ctx.issues.update(createdIssue.id, { status: "todo" }, companyId);
-  } catch (error) {
-    const fallbackRecord: MicronautTrackedMergeUpIssueRecord = {
-      targetBranch,
-      sourceBranch,
-      issueId: createdIssue.id,
-      issueIdentifier: normalizeOptionalString(createdIssue.identifier),
-      issueTitle: normalizeOptionalString(createdIssue.title),
-      agentId: agent.id,
-      agentName: agent.name,
-      agentUrlKey: agent.urlKey,
-      createdAt: normalizeDateValue(createdIssue.createdAt) ?? new Date().toISOString()
-    };
-    await persistTrackedMergeUpIssueRecord(ctx, projectId, fallbackRecord);
-    throw error;
-  }
 
   const trackedIssueRecord: MicronautTrackedMergeUpIssueRecord = {
     targetBranch,
     sourceBranch,
-    issueId: liveIssue.id,
-    issueIdentifier: normalizeOptionalString(liveIssue.identifier),
-    issueTitle: normalizeOptionalString(liveIssue.title),
+    issueId: createdIssue.id,
+    issueIdentifier: normalizeOptionalString(createdIssue.identifier),
+    issueTitle: normalizeOptionalString(createdIssue.title),
     agentId: agent.id,
     agentName: agent.name,
     agentUrlKey: agent.urlKey,
-    createdAt: normalizeDateValue(liveIssue.createdAt) ?? new Date().toISOString()
+    createdAt: normalizeDateValue(createdIssue.createdAt) ?? new Date().toISOString()
   };
   await persistTrackedMergeUpIssueRecord(ctx, projectId, trackedIssueRecord);
 
@@ -1860,19 +1850,16 @@ async function startMicronautMergeUp(
   }
 
   try {
-    await ctx.agents.invoke(agent.id, companyId, {
-      reason: "issue_assigned",
-      prompt: buildMergeUpIssueWakePrompt({
-        issueIdentifier: issueSnapshot.issue.issueIdentifier,
-        issueTitle: issueSnapshot.issue.issueTitle,
-        projectName: project.name,
-        repoFullName,
+    await ctx.issues.requestWakeup(issueSnapshot.issue.issueId, companyId, {
+      reason: buildMergeUpWakeupReason({
         sourceBranch,
         targetBranch
-      })
+      }),
+      contextSource: MICRONAUT_MERGE_UP_CONTEXT_SOURCE,
+      idempotencyKey: `micronaut-merge-up:${issueSnapshot.issue.issueId}`
     });
   } catch (error) {
-    ctx.logger.warn("Could not wake Micronaut merge-up assignee after issue creation.", {
+    ctx.logger.warn("Could not request a Micronaut merge-up assignment wakeup.", {
       issueId: issueSnapshot.issue.issueId,
       agentId: agent.id,
       projectId,
@@ -1999,29 +1986,6 @@ async function createMicronautBranch(
   };
 }
 
-export function shouldStartWorkerHost(moduleUrl: string, entry = process.argv[1]): boolean {
-  if (typeof entry !== "string" || !entry.trim()) {
-    return false;
-  }
-
-  const modulePath = fileURLToPath(moduleUrl);
-  let entryPath = entry;
-
-  if (entry.startsWith("file:")) {
-    try {
-      entryPath = fileURLToPath(new URL(entry));
-    } catch {
-      entryPath = entry;
-    }
-  }
-
-  try {
-    return realpathSync(entryPath) === realpathSync(modulePath);
-  } catch {
-    return resolve(entryPath) === resolve(modulePath);
-  }
-}
-
 const plugin = definePlugin({
   async setup(ctx) {
     ctx.data.register(MICRONAUT_PROJECT_OVERVIEW_DATA_KEY, async (params) =>
@@ -2047,6 +2011,4 @@ const plugin = definePlugin({
 
 export default plugin;
 
-if (shouldStartWorkerHost(import.meta.url)) {
-  startWorkerRpcHost({ plugin });
-}
+runWorker(plugin, import.meta.url);
