@@ -36,10 +36,9 @@ const manifest: PaperclipPluginManifestV1 = {
   capabilities: [
     "projects.read",
     "agents.read",
-    "agents.invoke",
     "issues.read",
     "issues.create",
-    "issues.update",
+    "issues.wakeup",
     "plugin.state.read",
     "plugin.state.write",
     "http.outbound",

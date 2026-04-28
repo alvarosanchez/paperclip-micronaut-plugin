@@ -683,21 +683,45 @@ async function ensureAgentSeeded(company, payload, fallbackName) {
     : null;
 
   if (reusableAgent?.id) {
+    if (reusableAgent.status === "pending_approval") {
+      return approveSeededAgent(reusableAgent, payload, fallbackName);
+    }
+
     log(`Reusing ${payload.title ?? "agent"} ${reusableAgent.name ?? fallbackName} (${reusableAgent.id}).`);
     return reusableAgent;
   }
 
-  const createdAgent = await fetchJson(agentsUrl, {
+  const hireUrl = new URL(`/api/companies/${company.id}/agent-hires`, baseUrl).toString();
+  const hireResult = await fetchJson(hireUrl, {
     method: "POST",
     body: JSON.stringify(payload)
   });
+  const createdAgent = hireResult?.agent;
 
   if (!createdAgent?.id) {
-    throw new Error(`${payload.title ?? "Agent"} creation succeeded but did not return an agent id.`);
+    throw new Error(`${payload.title ?? "Agent"} hire succeeded but did not return an agent id.`);
+  }
+
+  if (createdAgent.status === "pending_approval") {
+    return approveSeededAgent(createdAgent, payload, fallbackName);
   }
 
   log(`Seeded ${payload.title ?? "agent"} ${createdAgent.name ?? fallbackName} (${createdAgent.id}).`);
   return createdAgent;
+}
+
+async function approveSeededAgent(agent, payload, fallbackName) {
+  const approveUrl = new URL(`/api/agents/${agent.id}/approve`, baseUrl).toString();
+  const approvedAgent = await fetchJson(approveUrl, {
+    method: "POST"
+  });
+
+  if (!approvedAgent?.id) {
+    throw new Error(`${payload.title ?? "Agent"} approval succeeded but did not return an agent id.`);
+  }
+
+  log(`Approved ${payload.title ?? "agent"} ${approvedAgent.name ?? fallbackName} (${approvedAgent.id}).`);
+  return approvedAgent;
 }
 
 async function ensurePluginRegistered() {

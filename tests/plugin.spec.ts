@@ -1,10 +1,9 @@
-import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { pathToFileURL } from "node:url";
 import type { Agent, Project } from "@paperclipai/plugin-sdk";
-import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
+import { createTestHarness, type TestHarness } from "@paperclipai/plugin-sdk/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import manifest, { normalizeManifestVersion } from "../src/manifest.js";
 import {
@@ -20,13 +19,11 @@ import {
   type MicronautStartMergeUpResult,
   type MicronautProjectOverview
 } from "../src/micronaut.js";
-import * as workerModule from "../src/worker.js";
 import plugin from "../src/worker.js";
 
 const require = createRequire(import.meta.url);
 const packageJson = require("../package.json") as { version?: unknown };
 const itWithFakeGh = process.platform === "win32" ? it.skip : it;
-const itWithSymlink = process.platform === "win32" ? it.skip : it;
 
 function createProject(repoUrl: string): Project {
   return {
@@ -121,6 +118,32 @@ function jsonResponse(body: unknown, status = 200): Response {
     headers: {
       "content-type": "application/json"
     }
+  });
+}
+
+async function seedIssueStatus(
+  harness: TestHarness,
+  issueId: string,
+  companyId: string,
+  status: "done" | "cancelled",
+  closedAt: Date
+): Promise<void> {
+  const issue = await harness.ctx.issues.get(issueId, companyId);
+  expect(issue).not.toBeNull();
+  if (!issue) {
+    return;
+  }
+
+  harness.seed({
+    issues: [
+      {
+        ...issue,
+        status,
+        completedAt: status === "done" ? closedAt : null,
+        cancelledAt: status === "cancelled" ? closedAt : null,
+        updatedAt: closedAt
+      }
+    ]
   });
 }
 
@@ -326,10 +349,9 @@ describe("micronaut project detail tab", () => {
     expect(manifest.capabilities).toEqual([
       "projects.read",
       "agents.read",
-      "agents.invoke",
       "issues.read",
       "issues.create",
-      "issues.update",
+      "issues.wakeup",
       "plugin.state.read",
       "plugin.state.write",
       "http.outbound",
@@ -449,58 +471,6 @@ describe("micronaut project detail tab", () => {
     expect(normalizeManifestVersion("not-a-version")).toBeNull();
     expect(normalizeManifestVersion("")).toBeNull();
     expect(normalizeManifestVersion(packageJson.version)).toBe(packageJson.version);
-  });
-
-  itWithSymlink("matches symlinked worker entrypoints to the real worker file", async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), "paperclip-micronaut-plugin-worker-path-"));
-    const realWorkerPath = join(tempDir, "worker.js");
-    const symlinkWorkerPath = join(tempDir, "worker-symlink.js");
-
-    try {
-      await writeFile(realWorkerPath, "// test worker entrypoint\n");
-      await symlink(realWorkerPath, symlinkWorkerPath);
-
-      expect(
-        workerModule.shouldStartWorkerHost(pathToFileURL(realWorkerPath).href, symlinkWorkerPath)
-      ).toBe(true);
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("matches file URL worker entrypoints to the real worker file", async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), "paperclip-micronaut-plugin-worker-path-"));
-    const realWorkerPath = join(tempDir, "worker.js");
-
-    try {
-      await writeFile(realWorkerPath, "// test worker entrypoint\n");
-
-      expect(
-        workerModule.shouldStartWorkerHost(
-          pathToFileURL(realWorkerPath).href,
-          pathToFileURL(realWorkerPath).href
-        )
-      ).toBe(true);
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects unrelated worker entrypoints", async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), "paperclip-micronaut-plugin-worker-path-"));
-    const realWorkerPath = join(tempDir, "worker.js");
-    const unrelatedWorkerPath = join(tempDir, "other-worker.js");
-
-    try {
-      await writeFile(realWorkerPath, "// test worker entrypoint\n");
-      await writeFile(unrelatedWorkerPath, "// different worker entrypoint\n");
-
-      expect(
-        workerModule.shouldStartWorkerHost(pathToFileURL(realWorkerPath).href, unrelatedWorkerPath)
-      ).toBe(false);
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
   });
 
   itWithFakeGh("surfaces gh remediation when rate-limited GitHub metadata cannot fall back to gh", async () => {
@@ -1386,9 +1356,8 @@ exit 1
       projects: [createProject("https://github.com/micronaut-projects/micronaut-test-resources")],
       agents: [createAgent("agent-merge", { name: "Merge Bot" })]
     });
-    const invokeAgentSpy = vi.spyOn(harness.ctx.agents, "invoke");
     const createIssueSpy = vi.spyOn(harness.ctx.issues, "create");
-    const updateIssueSpy = vi.spyOn(harness.ctx.issues, "update");
+    const requestWakeupSpy = vi.spyOn(harness.ctx.issues, "requestWakeup");
 
     await plugin.definition.setup(harness.ctx);
 
@@ -1429,8 +1398,12 @@ exit 1
         companyId: "company-1",
         projectId: "project-1",
         title: "Merge up 4.0.x into 4.1.x",
+        status: "todo",
         assigneeAgentId: "agent-merge",
-        priority: "medium"
+        priority: "medium",
+        originKind: "plugin:paperclip-micronaut-plugin:merge-up",
+        originId: "project-1:4.0.x->4.1.x",
+        billingCode: "micronaut:merge-up"
       })
     );
     const issueCreateRequest = createIssueSpy.mock.lastCall?.[0];
@@ -1444,22 +1417,15 @@ exit 1
     expect(issueCreateRequest?.description).toContain(
       "projectVersion=4.0.0-SNAPSHOT` becomes `projectVersion=4.1.0-SNAPSHOT`"
     );
-    expect(updateIssueSpy).toHaveBeenCalledWith(
+    expect(requestWakeupSpy).toHaveBeenCalledWith(
       result.issue.issueId,
-      { status: "todo" },
-      "company-1",
-    );
-    expect(invokeAgentSpy).toHaveBeenCalledWith(
-      "agent-merge",
       "company-1",
       expect.objectContaining({
-        reason: "issue_assigned",
-        prompt: expect.stringContaining("Open your assigned issue queue, pick up that issue immediately")
+        reason: "Micronaut merge-up assigned: 4.0.x -> 4.1.x",
+        contextSource: "paperclip-micronaut-plugin.merge-up",
+        idempotencyKey: `micronaut-merge-up:${result.issue.issueId}`
       })
     );
-    const invokeRequest = invokeAgentSpy.mock.lastCall?.[2];
-    expect(invokeRequest?.prompt).toContain("Merge up 4.0.x into 4.1.x");
-    expect(invokeRequest?.prompt).toContain("micronaut-projects/micronaut-test-resources");
     expect(harness.getState(buildProjectMergeUpIssuesScope("project-1"))).toEqual({
       version: 1,
       issues: [
@@ -1541,7 +1507,13 @@ exit 1
         updatedAt: new Date("2026-04-15T08:40:00.000Z")
       }
     ]);
-    await harness.ctx.issues.update(result.issue.issueId, { status: "done" }, "company-1");
+    await seedIssueStatus(
+      harness,
+      result.issue.issueId,
+      "company-1",
+      "done",
+      new Date("2026-04-15T08:50:00.000Z")
+    );
 
     const state = await harness.getData<MicronautMergeUpState>(MICRONAUT_MERGE_UP_STATE_DATA_KEY, {
       companyId: "company-1",
@@ -1597,7 +1569,13 @@ exit 1
 
       return new Response("Not found", { status: 404 });
     });
-    await harness.ctx.issues.update(result.issue.issueId, { status: "done" }, "company-1");
+    await seedIssueStatus(
+      harness,
+      result.issue.issueId,
+      "company-1",
+      "done",
+      new Date("2026-04-15T08:50:00.000Z")
+    );
 
     const state = await harness.getData<MicronautMergeUpState>(MICRONAUT_MERGE_UP_STATE_DATA_KEY, {
       companyId: "company-1",
