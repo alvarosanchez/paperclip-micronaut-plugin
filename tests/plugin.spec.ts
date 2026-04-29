@@ -22,7 +22,10 @@ import {
 import plugin from "../src/worker.js";
 
 const require = createRequire(import.meta.url);
-const packageJson = require("../package.json") as { version?: unknown };
+const packageJson = require("../package.json") as {
+  devDependencies?: Record<string, unknown>;
+  version?: unknown;
+};
 const itWithFakeGh = process.platform === "win32" ? it.skip : it;
 
 function createProject(repoUrl: string): Project {
@@ -471,6 +474,31 @@ describe("micronaut project detail tab", () => {
     expect(normalizeManifestVersion("not-a-version")).toBeNull();
     expect(normalizeManifestVersion("")).toBeNull();
     expect(normalizeManifestVersion(packageJson.version)).toBe(packageJson.version);
+  });
+
+  it("targets the Paperclip 2026.428 plugin SDK baseline", async () => {
+    const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
+
+    expect(packageJson.devDependencies?.["@paperclipai/plugin-sdk"]).toBe("2026.428.0");
+    expect(readme).toContain("version `2026.428.0` or newer");
+  });
+
+  it("keeps disposable Paperclip harnesses explicit about 2026.428 host defaults", async () => {
+    const harnessPaths = [
+      "../scripts/e2e/run-paperclip-smoke.mjs",
+      "../scripts/e2e/manual-paperclip-verify.mjs"
+    ];
+
+    for (const harnessPath of harnessPaths) {
+      const source = await readFile(new URL(harnessPath, import.meta.url), "utf8");
+
+      expect(source).toMatch(/requireBoardApprovalForNewAgents:\s*true/);
+      expect(source).toMatch(/method:\s*["']PATCH["']/);
+      expect(source).toContain("paperclipai@2026.428.0");
+      expect(source).toContain("PAPERCLIP_E2E_PAPERCLIPAI_PACKAGE");
+      expect(source).toMatch(/executionWorkspacePolicy:\s*\{/);
+      expect(source).toMatch(/defaultMode:\s*["']isolated_workspace["']/);
+    }
   });
 
   itWithFakeGh("surfaces gh remediation when rate-limited GitHub metadata cannot fall back to gh", async () => {

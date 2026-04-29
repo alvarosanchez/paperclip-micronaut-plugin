@@ -24,6 +24,7 @@ const requestedPort = process.env.PAPERCLIP_E2E_PORT ? Number(process.env.PAPERC
 const requestedDbPort = process.env.PAPERCLIP_E2E_DB_PORT
   ? Number(process.env.PAPERCLIP_E2E_DB_PORT)
   : 54329;
+const paperclipPackage = process.env.PAPERCLIP_E2E_PAPERCLIPAI_PACKAGE?.trim() || "paperclipai@2026.428.0";
 const defaultTimeoutMs = 30000;
 const githubOwner = "micronaut-projects";
 const githubRepo = "micronaut-core";
@@ -98,7 +99,7 @@ function matchesSeededAgent(agent, payload) {
 }
 
 function getPaperclipCommandArgs(args) {
-  return ["-p", "node@20", "-p", "paperclipai", "paperclipai", ...args];
+  return ["-p", "node@20", "-p", paperclipPackage, "paperclipai", ...args];
 }
 
 function runCommand(command, args, options = {}) {
@@ -655,7 +656,7 @@ async function ensureCompanySeeded() {
   const existingCompanies = await fetchJson(companiesUrl);
   if (Array.isArray(existingCompanies) && existingCompanies.length > 0) {
     log(`Found ${existingCompanies.length} existing companies; onboarding should be skipped.`);
-    return existingCompanies[0];
+    return ensureCompanyRequiresBoardApproval(existingCompanies[0]);
   }
 
   const createdCompany = await fetchJson(companiesUrl, {
@@ -671,8 +672,38 @@ async function ensureCompanySeeded() {
     throw new Error("Expected at least one company after seeding, but Paperclip still reports none.");
   }
 
-  log(`Seeded company ${createdCompany?.name ?? postCreateCompanies[0]?.name ?? "unknown"}.`);
-  return postCreateCompanies[0];
+  const company = await ensureCompanyRequiresBoardApproval(
+    createdCompany?.id ? createdCompany : postCreateCompanies[0]
+  );
+  log(`Seeded company ${company?.name ?? "unknown"}.`);
+  return company;
+}
+
+async function ensureCompanyRequiresBoardApproval(company) {
+  if (!company?.id) {
+    throw new Error("Expected a company id before enabling board approval for new agents.");
+  }
+
+  if (company.requireBoardApprovalForNewAgents === true) {
+    return company;
+  }
+
+  const companyUrl = new URL(`/api/companies/${company.id}`, baseUrl).toString();
+  const updatedCompany = await fetchJson(companyUrl, {
+    method: "PATCH",
+    body: JSON.stringify({
+      requireBoardApprovalForNewAgents: true
+    })
+  });
+
+  if (updatedCompany?.requireBoardApprovalForNewAgents !== true) {
+    throw new Error(
+      "Expected Paperclip to enable board approval for new agents on the disposable company."
+    );
+  }
+
+  log(`Enabled board approval for new agents on ${updatedCompany.name ?? "the disposable company"}.`);
+  return updatedCompany;
 }
 
 async function ensureAgentSeeded(company, payload, fallbackName) {
@@ -807,6 +838,10 @@ async function createMicronautCoreProject(company) {
     body: JSON.stringify({
       name: projectName,
       description: "Disposable Micronaut Core project for Paperclip plugin smoke verification.",
+      executionWorkspacePolicy: {
+        enabled: true,
+        defaultMode: "isolated_workspace"
+      },
       workspace: {
         name: "origin",
         isPrimary: true,
