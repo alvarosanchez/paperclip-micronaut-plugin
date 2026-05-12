@@ -54,7 +54,7 @@ const seededEngineerAgentPayload = {
 const settingsIndexPath = '/instance/settings/plugins';
 const requestedPort = process.env.PAPERCLIP_E2E_PORT ? Number(process.env.PAPERCLIP_E2E_PORT) : 3100;
 const requestedDbPort = process.env.PAPERCLIP_E2E_DB_PORT ? Number(process.env.PAPERCLIP_E2E_DB_PORT) : 54329;
-const paperclipPackage = process.env.PAPERCLIP_E2E_PAPERCLIPAI_PACKAGE?.trim() || 'paperclipai@2026.428.0';
+const paperclipPackage = process.env.PAPERCLIP_E2E_PAPERCLIPAI_PACKAGE?.trim() || 'paperclipai@2026.512.0';
 const env = {
   ...process.env,
   CI: 'true',
