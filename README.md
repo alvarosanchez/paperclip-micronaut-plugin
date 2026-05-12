@@ -22,7 +22,7 @@ Micronaut-focused Paperclip plugin that turns a project detail tab into a releas
 ## Requirements
 
 - Node.js 20 or newer
-- A Paperclip instance with plugin support, version `2026.428.0` or newer
+- A Paperclip instance with plugin support, version `2026.512.0` or newer
 - A Paperclip project backed by a GitHub repository in the `micronaut-projects` organization
 - Outbound access to the GitHub API from the plugin worker
 - `gh` installed and authenticated on the Paperclip host if you want host-side branch creation and the GitHub CLI fallback path

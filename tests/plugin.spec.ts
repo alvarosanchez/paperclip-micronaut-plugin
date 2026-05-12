@@ -24,6 +24,7 @@ import plugin from "../src/worker.js";
 const require = createRequire(import.meta.url);
 const packageJson = require("../package.json") as {
   devDependencies?: Record<string, unknown>;
+  packageManager?: unknown;
   version?: unknown;
 };
 const itWithFakeGh = process.platform === "win32" ? it.skip : it;
@@ -476,14 +477,14 @@ describe("micronaut project detail tab", () => {
     expect(normalizeManifestVersion(packageJson.version)).toBe(packageJson.version);
   });
 
-  it("targets the Paperclip 2026.428 plugin SDK baseline", async () => {
+  it("targets the Paperclip 2026.512 plugin SDK baseline", async () => {
     const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
 
-    expect(packageJson.devDependencies?.["@paperclipai/plugin-sdk"]).toBe("2026.428.0");
-    expect(readme).toContain("version `2026.428.0` or newer");
+    expect(packageJson.devDependencies?.["@paperclipai/plugin-sdk"]).toBe("2026.512.0");
+    expect(readme).toContain("version `2026.512.0` or newer");
   });
 
-  it("keeps disposable Paperclip harnesses explicit about 2026.428 host defaults", async () => {
+  it("keeps disposable Paperclip harnesses explicit about 2026.512 host defaults", async () => {
     const harnessPaths = [
       "../scripts/e2e/run-paperclip-smoke.mjs",
       "../scripts/e2e/manual-paperclip-verify.mjs"
@@ -494,10 +495,29 @@ describe("micronaut project detail tab", () => {
 
       expect(source).toMatch(/requireBoardApprovalForNewAgents:\s*true/);
       expect(source).toMatch(/method:\s*["']PATCH["']/);
-      expect(source).toContain("paperclipai@2026.428.0");
+      expect(source).toContain("paperclipai@2026.512.0");
       expect(source).toContain("PAPERCLIP_E2E_PAPERCLIPAI_PACKAGE");
       expect(source).toMatch(/executionWorkspacePolicy:\s*\{/);
       expect(source).toMatch(/defaultMode:\s*["']isolated_workspace["']/);
+    }
+  });
+
+  it("keeps the package manager and GitHub Actions pnpm versions aligned", async () => {
+    const workflowPaths = [
+      "../.github/workflows/ci.yml",
+      "../.github/workflows/release.yml"
+    ];
+
+    expect(packageJson.packageManager).toBe("pnpm@10.33.4");
+
+    for (const workflowPath of workflowPaths) {
+      const source = await readFile(new URL(workflowPath, import.meta.url), "utf8");
+      const actionVersions = [...source.matchAll(/version:\s*(10\.\d+\.\d+)/g)].map(
+        (match) => match[1]
+      );
+
+      expect(actionVersions.length).toBeGreaterThan(0);
+      expect(actionVersions).toEqual(actionVersions.map(() => "10.33.4"));
     }
   });
 
@@ -1518,9 +1538,12 @@ exit 1
         companyId: "company-1",
         id: "comment-1",
         issueId: result.issue.issueId,
+        authorType: "agent",
         authorAgentId: "agent-merge",
         authorUserId: null,
         body: "Older PR https://github.com/micronaut-projects/micronaut-test-resources/pull/321",
+        presentation: null,
+        metadata: null,
         createdAt: new Date("2026-04-15T08:35:00.000Z"),
         updatedAt: new Date("2026-04-15T08:35:00.000Z")
       },
@@ -1528,9 +1551,12 @@ exit 1
         companyId: "company-1",
         id: "comment-2",
         issueId: result.issue.issueId,
+        authorType: "agent",
         authorAgentId: "agent-merge",
         authorUserId: null,
         body: "Ready for review: https://github.com/micronaut-projects/micronaut-test-resources/pull/654",
+        presentation: null,
+        metadata: null,
         createdAt: new Date("2026-04-15T08:40:00.000Z"),
         updatedAt: new Date("2026-04-15T08:40:00.000Z")
       }
