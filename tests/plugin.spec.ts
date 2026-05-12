@@ -507,17 +507,21 @@ describe("micronaut project detail tab", () => {
       "../.github/workflows/ci.yml",
       "../.github/workflows/release.yml"
     ];
+    const packageManager =
+      typeof packageJson.packageManager === "string" ? packageJson.packageManager : "";
+    const pnpmVersion = /^pnpm@(?<version>\d+\.\d+\.\d+)$/.exec(packageManager)?.groups
+      ?.version;
 
-    expect(packageJson.packageManager).toBe("pnpm@10.33.4");
+    expect(pnpmVersion).toBeDefined();
 
     for (const workflowPath of workflowPaths) {
       const source = await readFile(new URL(workflowPath, import.meta.url), "utf8");
-      const actionVersions = [...source.matchAll(/version:\s*(10\.\d+\.\d+)/g)].map(
+      const actionVersions = [...source.matchAll(/^\s*version:\s*["']?(\d+\.\d+\.\d+)["']?\s*$/gm)].map(
         (match) => match[1]
       );
 
       expect(actionVersions.length).toBeGreaterThan(0);
-      expect(actionVersions).toEqual(actionVersions.map(() => "10.33.4"));
+      expect(actionVersions).toEqual(actionVersions.map(() => pnpmVersion));
     }
   });
 
