@@ -477,14 +477,14 @@ describe("micronaut project detail tab", () => {
     expect(normalizeManifestVersion(packageJson.version)).toBe(packageJson.version);
   });
 
-  it("targets the Paperclip 2026.512 plugin SDK baseline", async () => {
+  it("targets the Paperclip 2026.517 plugin SDK baseline", async () => {
     const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
 
-    expect(packageJson.devDependencies?.["@paperclipai/plugin-sdk"]).toBe("2026.512.0");
-    expect(readme).toContain("version `2026.512.0` or newer");
+    expect(packageJson.devDependencies?.["@paperclipai/plugin-sdk"]).toBe("2026.517.0");
+    expect(readme).toContain("version `2026.517.0` or newer");
   });
 
-  it("keeps disposable Paperclip harnesses explicit about 2026.512 host defaults", async () => {
+  it("keeps disposable Paperclip harnesses explicit about 2026.517 host defaults", async () => {
     const harnessPaths = [
       "../scripts/e2e/run-paperclip-smoke.mjs",
       "../scripts/e2e/manual-paperclip-verify.mjs"
@@ -495,7 +495,7 @@ describe("micronaut project detail tab", () => {
 
       expect(source).toMatch(/requireBoardApprovalForNewAgents:\s*true/);
       expect(source).toMatch(/method:\s*["']PATCH["']/);
-      expect(source).toContain("paperclipai@2026.512.0");
+      expect(source).toContain("paperclipai@2026.517.0");
       expect(source).toContain("PAPERCLIP_E2E_PAPERCLIPAI_PACKAGE");
       expect(source).toMatch(/executionWorkspacePolicy:\s*\{/);
       expect(source).toMatch(/defaultMode:\s*["']isolated_workspace["']/);
