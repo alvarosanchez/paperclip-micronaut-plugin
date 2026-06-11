@@ -22,7 +22,7 @@ Micronaut-focused Paperclip plugin that turns a project detail tab into a releas
 ## Requirements
 
 - Node.js 20 or newer
-- A Paperclip instance with plugin support, version `2026.517.0` or newer
+- A Paperclip instance with plugin support, version `2026.609.0` or newer
 - A Paperclip project backed by a GitHub repository in the `micronaut-projects` organization
 - Outbound access to the GitHub API from the plugin worker
 - `gh` installed and authenticated on the Paperclip host if you want host-side branch creation and the GitHub CLI fallback path
@@ -96,6 +96,8 @@ Additional verification commands:
 - `pnpm verify:manual` for an interactive local verification run
 
 Both verification harnesses explicitly enable board approval for the disposable company, seed their test agents through Paperclip's board-governed hire flow, and approve pending hires before installing the local plugin. They also create the disposable Git-backed project with isolated issue workspaces enabled so merge-up issues exercise the current Paperclip project defaults.
+
+Set `PAPERCLIP_E2E_PAPERCLIPAI_PACKAGE=<package>` to test a different `paperclipai` package; by default both harnesses run against `paperclipai@2026.609.0`.
 
 ## Release
 

@@ -24,7 +24,7 @@ const requestedPort = process.env.PAPERCLIP_E2E_PORT ? Number(process.env.PAPERC
 const requestedDbPort = process.env.PAPERCLIP_E2E_DB_PORT
   ? Number(process.env.PAPERCLIP_E2E_DB_PORT)
   : 54329;
-const paperclipPackage = process.env.PAPERCLIP_E2E_PAPERCLIPAI_PACKAGE?.trim() || "paperclipai@2026.517.0";
+const paperclipPackage = process.env.PAPERCLIP_E2E_PAPERCLIPAI_PACKAGE?.trim() || "paperclipai@2026.609.0";
 const defaultTimeoutMs = 30000;
 const githubOwner = "micronaut-projects";
 const githubRepo = "micronaut-core";
@@ -1248,7 +1248,7 @@ async function waitForServerExit(timeoutMs) {
     return;
   }
 
-  if (serverProcess.exitCode !== null) {
+  if (serverProcess.exitCode !== null || serverProcess.signalCode !== null) {
     return;
   }
 
@@ -1266,6 +1266,27 @@ async function waitForServerExit(timeoutMs) {
   });
 }
 
+function signalServerProcess(signal) {
+  if (!serverProcess?.pid) {
+    return;
+  }
+
+  try {
+    if (process.platform !== "win32") {
+      process.kill(-serverProcess.pid, signal);
+      return;
+    }
+  } catch {
+    // Fall back to signaling the wrapper process if the process group is already gone.
+  }
+
+  try {
+    serverProcess.kill(signal);
+  } catch {
+    // The process may have already exited between checks.
+  }
+}
+
 async function cleanup() {
   if (cleanedUp) {
     return;
@@ -1274,13 +1295,13 @@ async function cleanup() {
   cleanedUp = true;
 
   if (serverProcess) {
-    if (serverProcess.exitCode === null && !serverProcess.killed) {
-      serverProcess.kill("SIGINT");
+    if (serverProcess.exitCode === null && serverProcess.signalCode === null) {
+      signalServerProcess("SIGINT");
       await waitForServerExit(5000);
     }
 
-    if (serverProcess.exitCode === null && !serverProcess.killed) {
-      serverProcess.kill("SIGKILL");
+    if (serverProcess.exitCode === null && serverProcess.signalCode === null) {
+      signalServerProcess("SIGKILL");
       await waitForServerExit(5000);
     }
   }
