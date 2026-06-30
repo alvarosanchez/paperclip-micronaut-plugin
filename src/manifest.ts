@@ -37,6 +37,7 @@ const manifest: PaperclipPluginManifestV1 = {
     "projects.read",
     "agents.read",
     "issues.read",
+    "issue.comments.read",
     "issues.create",
     "issues.wakeup",
     "plugin.state.read",

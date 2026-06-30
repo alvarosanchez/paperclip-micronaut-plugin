@@ -22,7 +22,7 @@ Micronaut-focused Paperclip plugin that turns a project detail tab into a releas
 ## Requirements
 
 - Node.js 20 or newer
-- A Paperclip instance with plugin support, version `2026.618.0` or newer
+- A Paperclip instance with plugin support, version `2026.626.0` or newer
 - A Paperclip project backed by a GitHub repository in the `micronaut-projects` organization
 - Outbound access to the GitHub API from the plugin worker
 - `gh` installed and authenticated on the Paperclip host if you want host-side branch creation and the GitHub CLI fallback path
@@ -97,11 +97,14 @@ Additional verification commands:
 
 Both verification harnesses explicitly enable board approval for the disposable company, seed their test agents through Paperclip's board-governed hire flow, and approve pending hires before installing the local plugin. They also create the disposable Git-backed project with isolated issue workspaces enabled so merge-up issues exercise the current Paperclip project defaults.
 
-Set `PAPERCLIP_E2E_PAPERCLIPAI_PACKAGE=<package>` to test a different `paperclipai` package; by default both harnesses run against `paperclipai@2026.618.0` under `node@24`, matching the release's Docker baseline and avoiding Node 20's missing `node:sqlite` runtime module.
+Set `PAPERCLIP_E2E_PAPERCLIPAI_PACKAGE=<package>` to test a different `paperclipai` package; by default both harnesses run against `paperclipai@2026.626.0` under `node@24`, matching the release's Docker baseline and avoiding Node 20's missing `node:sqlite` runtime module.
 
 ## Release
 
-Paperclip 2026.618.0 keeps the Micronaut plugin compatibility scope focused on the SDK/runtime baseline and disposable verification harness. The plugin stores company settings in company-scoped plugin state and does not use plugin entity mappings, environment drivers, or host-managed Skills Store APIs directly.
+
+Paperclip 2026.626.0 adds built-in Hermes adapters, task watchdogs, ask work mode, routine date variables, Teams Catalog, workspace downloads, and external object references. The Micronaut release cockpit does not create agents, routines, issue work modes, or external object providers, so this release-adoption PR keeps the plugin on the new SDK/runtime baseline and leaves those host/company-package capabilities to Paperclip and the live Micronaut Agent Company workflow.
+
+Paperclip 2026.626.0 keeps the Micronaut plugin compatibility scope focused on the SDK/runtime baseline and disposable verification harness. The plugin stores company settings in company-scoped plugin state and does not use plugin entity mappings, environment drivers, or host-managed Skills Store APIs directly.
 
 
 - Pull requests and pushes to `main` run GitHub Actions CI for typecheck, tests, build, and `npm pack --dry-run`.
