@@ -480,21 +480,53 @@ describe("micronaut project detail tab", () => {
   });
 
 
-  it("documents the Paperclip 2026.626 adoption boundary", async () => {
+  it("documents the Paperclip 2026.831 adoption boundary", async () => {
     const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
 
-    expect(readme).toContain("Paperclip 2026.626.0 adds built-in Hermes adapters");
-    expect(readme).toContain("The Micronaut release cockpit does not create agents, routines, issue work modes, or external object providers");
+    expect(readme).toContain("### Paperclip 2026.831 adoption boundary");
+    expect(readme).toContain("Paperclip 2026.831.1 makes plugin configuration company-scoped");
+    expect(readme).toContain("`ctx.config.get(companyId)`");
+    expect(readme).toContain("`ctx.secrets.resolve(ref, { companyId, configPath })`");
+    expect(readme).toContain("host tool gateway");
+    expect(readme).toContain("The Micronaut release cockpit uses none of these surfaces");
+    expect(readme).toContain(
+      "does not request the new issue interaction, attachment, approval, or human-attributed comment capabilities"
+    );
+    expect(readme).toContain(
+      "the plugin does not create agents, routines, issue work modes, or external object providers"
+    );
   });
 
-  it("targets the Paperclip 2026.626 plugin SDK baseline", async () => {
+  it("keeps the worker outside the 2026.831 company-scoped config and secret surfaces", () => {
+    // The README promises that none of the company-scoped config machinery applies to this
+    // plugin. Pin that against the real definition and manifest so adopting any of these
+    // surfaces forces the adoption-boundary documentation to be revisited.
+    expect(plugin.definition.multiCompanyConfig).toBeUndefined();
+    expect(plugin.definition.onConfigChanged).toBeUndefined();
+    expect(plugin.definition.onHealth).toBeUndefined();
+    expect(manifest.instanceConfigSchema).toBeUndefined();
+    expect(manifest.environmentDrivers).toBeUndefined();
+    expect(manifest.tools).toBeUndefined();
+    for (const capability of [
+      "issue.interactions.read",
+      "issue.interactions.respond",
+      "issue.attachments.read",
+      "approvals.read",
+      "approvals.respond",
+      "issue.comments.create_human_attributed"
+    ]) {
+      expect(manifest.capabilities).not.toContain(capability);
+    }
+  });
+
+  it("targets the Paperclip 2026.831 plugin SDK baseline", async () => {
     const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
 
-    expect(packageJson.devDependencies?.["@paperclipai/plugin-sdk"]).toBe("2026.626.0");
-    expect(readme).toContain("version `2026.626.0` or newer");
+    expect(packageJson.devDependencies?.["@paperclipai/plugin-sdk"]).toBe("2026.831.1");
+    expect(readme).toContain("version `2026.831.1` or newer");
   });
 
-  it("keeps disposable Paperclip harnesses explicit about 2026.626 host defaults", async () => {
+  it("keeps disposable Paperclip harnesses explicit about 2026.831 host defaults", async () => {
     const harnessPaths = [
       "../scripts/e2e/run-paperclip-smoke.mjs",
       "../scripts/e2e/manual-paperclip-verify.mjs"
@@ -505,7 +537,8 @@ describe("micronaut project detail tab", () => {
 
       expect(source).toMatch(/requireBoardApprovalForNewAgents:\s*true/);
       expect(source).toMatch(/method:\s*["']PATCH["']/);
-      expect(source).toContain("paperclipai@2026.626.0");
+      expect(source).toContain("paperclipai@2026.831.1");
+      expect(source).not.toContain("paperclipai@2026.626.0");
       expect(source).toContain("node@24");
       expect(source).toContain("PAPERCLIP_E2E_PAPERCLIPAI_PACKAGE");
       expect(source).toMatch(/executionWorkspacePolicy:\s*\{/);
