@@ -1,6 +1,7 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
+  "platformAutomerge": false,
   "packageRules": [
     {
       "description": "Require dashboard approval before opening major upgrade PRs.",
@@ -8,16 +9,30 @@
       "dependencyDashboardApproval": true
     },
     {
-      "description": "Group routine npm and pnpm dependency updates into one PR.",
+      "description": "Automerge patch-level npm and pnpm updates once CI is green.",
       "matchManagers": ["npm"],
-      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
-      "groupName": "npm dependencies (non-major)"
+      "matchUpdateTypes": ["patch", "pin", "digest"],
+      "groupName": "npm patch updates",
+      "automerge": true
     },
     {
-      "description": "Group routine GitHub Actions updates into one PR.",
+      "description": "Group minor npm and pnpm updates into one PR for review.",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["minor"],
+      "groupName": "npm dependencies (minor)"
+    },
+    {
+      "description": "Automerge patch-level GitHub Actions updates once CI is green.",
       "matchManagers": ["github-actions"],
-      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
-      "groupName": "github actions (non-major)"
+      "matchUpdateTypes": ["patch", "pin", "digest"],
+      "groupName": "github actions patch updates",
+      "automerge": true
+    },
+    {
+      "description": "Group minor GitHub Actions updates into one PR for review.",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor"],
+      "groupName": "github actions (minor)"
     }
   ]
 }
