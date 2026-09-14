@@ -546,26 +546,22 @@ describe("micronaut project detail tab", () => {
     }
   });
 
-  it("keeps the package manager and GitHub Actions pnpm versions aligned", async () => {
+  it("lets package.json packageManager be the single source of truth for pnpm", async () => {
     const workflowPaths = [
       "../.github/workflows/ci.yml",
       "../.github/workflows/release.yml"
     ];
     const packageManager =
       typeof packageJson.packageManager === "string" ? packageJson.packageManager : "";
-    const pnpmVersion = /^pnpm@(?<version>\d+\.\d+\.\d+)$/.exec(packageManager)?.groups
-      ?.version;
 
-    expect(pnpmVersion).toBeDefined();
+    expect(packageManager).toMatch(/^pnpm@\d+\.\d+\.\d+$/);
 
     for (const workflowPath of workflowPaths) {
       const source = await readFile(new URL(workflowPath, import.meta.url), "utf8");
-      const actionVersions = [...source.matchAll(/^\s*version:\s*["']?(\d+\.\d+\.\d+)["']?\s*$/gm)].map(
-        (match) => match[1]
-      );
-
-      expect(actionVersions.length).toBeGreaterThan(0);
-      expect(actionVersions).toEqual(actionVersions.map(() => pnpmVersion));
+      expect(source).toMatch(/uses: pnpm\/action-setup@/);
+      // pnpm/action-setup reads packageManager when no version input is given, so a
+      // Renovate patch bump of packageManager must not need a matching workflow edit.
+      expect(source).not.toMatch(/^\s*version:\s*["']?\d+\.\d+\.\d+["']?\s*$/m);
     }
   });
 
