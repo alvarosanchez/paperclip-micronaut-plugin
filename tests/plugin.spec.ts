@@ -5,6 +5,7 @@ import { delimiter, join } from "node:path";
 import type { Agent, Project } from "@paperclipai/plugin-sdk";
 import { createTestHarness, type TestHarness } from "@paperclipai/plugin-sdk/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parse as parseYaml } from "yaml";
 import manifest, { normalizeManifestVersion } from "../src/manifest.js";
 import {
   MICRONAUT_CREATE_BRANCH_ACTION_KEY,
@@ -42,68 +43,36 @@ function compareVersions(left: string, right: string): number {
   return 0;
 }
 
-function indentationOf(line: string): number {
-  return line.length - line.trimStart().length;
-}
+type WorkflowStep = {
+  uses?: unknown;
+  with?: Record<string, unknown> | null;
+};
+
+type WorkflowJob = {
+  steps?: WorkflowStep[];
+};
+
+type Workflow = {
+  jobs?: Record<string, WorkflowJob>;
+};
 
 /**
- * Returns the `with:` input keys of every workflow step that `uses:` the given action.
- * Steps are YAML list items; a step ends at the next non-blank line indented at or
- * before the step's `- ` marker.
+ * Returns the `with:` input keys of every workflow step that `uses:` the given action
+ * (matching `action` itself or `action@ref`), across all jobs. Parses the workflow as
+ * YAML (via the `yaml` package) rather than pattern-matching lines, so it recognizes
+ * `with:` regardless of key order relative to `uses:` or mapping style (block `with:`
+ * vs. inline `with: { version: ... }`).
  */
 function workflowStepInputKeys(source: string, action: string): string[][] {
-  const lines = source.split(/\r?\n/);
-  const results: string[][] = [];
+  const workflow = (parseYaml(source) ?? {}) as Workflow;
+  const steps = Object.values(workflow.jobs ?? {}).flatMap((job) => job.steps ?? []);
 
-  lines.forEach((line, index) => {
-    if (!new RegExp(`^\\s*(?:-\\s+)?uses:\\s*${action}(?:@|\\s|$)`).test(line)) {
-      return;
-    }
-
-    let stepIndent = indentationOf(line);
-    for (let cursor = index; cursor >= 0; cursor -= 1) {
-      const candidate = lines[cursor] ?? "";
-      if (/^\s*-\s/.test(candidate) && indentationOf(candidate) <= stepIndent) {
-        stepIndent = indentationOf(candidate);
-        break;
-      }
-    }
-
-    const keys: string[] = [];
-    let withIndent: number | null = null;
-    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
-      const current = lines[cursor] ?? "";
-      if (current.trim() === "" || current.trim().startsWith("#")) {
-        continue;
-      }
-
-      const indent = indentationOf(current);
-      if (indent <= stepIndent) {
-        break;
-      }
-
-      if (withIndent === null) {
-        if (/^\s*with:\s*$/.test(current)) {
-          withIndent = indent;
-        }
-        continue;
-      }
-
-      if (indent <= withIndent) {
-        withIndent = null;
-        continue;
-      }
-
-      const match = /^\s*([A-Za-z0-9_.-]+)\s*:/.exec(current);
-      if (match?.[1]) {
-        keys.push(match[1]);
-      }
-    }
-
-    results.push(keys);
-  });
-
-  return results;
+  return steps
+    .filter(
+      (step) =>
+        typeof step.uses === "string" && (step.uses === action || step.uses.startsWith(`${action}@`))
+    )
+    .map((step) => Object.keys(step.with ?? {}));
 }
 
 function createProject(repoUrl: string): Project {
