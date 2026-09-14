@@ -22,7 +22,7 @@ Micronaut-focused Paperclip plugin that turns a project detail tab into a releas
 ## Requirements
 
 - Node.js 20 or newer
-- A Paperclip instance with plugin support, version `2026.626.0` or newer
+- A Paperclip instance with plugin support, version `2026.831.1` or newer
 - A Paperclip project backed by a GitHub repository in the `micronaut-projects` organization
 - Outbound access to the GitHub API from the plugin worker
 - `gh` installed and authenticated on the Paperclip host if you want host-side branch creation and the GitHub CLI fallback path
@@ -97,15 +97,17 @@ Additional verification commands:
 
 Both verification harnesses explicitly enable board approval for the disposable company, seed their test agents through Paperclip's board-governed hire flow, and approve pending hires before installing the local plugin. They also create the disposable Git-backed project with isolated issue workspaces enabled so merge-up issues exercise the current Paperclip project defaults.
 
-Set `PAPERCLIP_E2E_PAPERCLIPAI_PACKAGE=<package>` to test a different `paperclipai` package; by default both harnesses run against `paperclipai@2026.626.0` under `node@24`, matching the release's Docker baseline and avoiding Node 20's missing `node:sqlite` runtime module.
+Set `PAPERCLIP_E2E_PAPERCLIPAI_PACKAGE=<package>` to test a different `paperclipai` package; by default both harnesses run against `paperclipai@2026.831.1` under `node@24`, matching the release's Docker baseline and avoiding Node 20's missing `node:sqlite` runtime module.
 
 ## Release
 
+### Paperclip 2026.831 adoption boundary
 
-Paperclip 2026.626.0 adds built-in Hermes adapters, task watchdogs, ask work mode, routine date variables, Teams Catalog, workspace downloads, and external object references. The Micronaut release cockpit does not create agents, routines, issue work modes, or external object providers, so this release-adoption PR keeps the plugin on the new SDK/runtime baseline and leaves those host/company-package capabilities to Paperclip and the live Micronaut Agent Company workflow.
+Paperclip 2026.831.1 makes plugin configuration company-scoped: `ctx.config.get(companyId)` requires a company context, workers start with an empty config and receive one `configChanged` replay per configured company, and workers that serve several companies with differing config must declare `multiCompanyConfig: true`. Plugin secret refs, which 2026.626 rejected at save time, are re-enabled as company-scoped `{ type: "secret_ref" }` bindings resolved through `ctx.secrets.resolve(ref, { companyId, configPath })`. Agent tool execution now goes through the host tool gateway and is subject to each company's tool-access policy. The release also adds optional plugin capabilities for issue interactions (`issue.interactions.read`, `issue.interactions.respond`), issue attachments (`issue.attachments.read`), approvals (`approvals.read`, `approvals.respond`), and human-attributed comments (`issue.comments.create_human_attributed`).
 
-Paperclip 2026.626.0 keeps the Micronaut plugin compatibility scope focused on the SDK/runtime baseline and disposable verification harness. The plugin stores company settings in company-scoped plugin state and does not use plugin entity mappings, environment drivers, or host-managed Skills Store APIs directly.
+The Micronaut release cockpit uses none of these surfaces, so this release-adoption PR keeps the plugin on the new SDK/runtime baseline without worker or manifest code changes. The worker declares no config schema, never calls `ctx.config.get` or `ctx.secrets.resolve`, registers no agent tools, jobs, or event subscriptions, and implements neither `onConfigChanged` nor `onHealth`, so the empty startup config, per-company replay, and `multiCompanyConfig` rules do not apply. Per-company settings (the preferred merge-up assignee) live in company-scoped plugin state, and every worker-to-host call happens inside a company-scoped data or action invocation, which satisfies the 2026.831 "company context is required" gate. The plugin does not request the new issue interaction, attachment, approval, or human-attributed comment capabilities.
 
+As in 2026.626, the plugin does not create agents, routines, issue work modes, or external object providers, and does not use plugin entity mappings, environment drivers, or host-managed Skills Store APIs directly; those host/company-package capabilities stay with Paperclip and the live Micronaut Agent Company workflow.
 
 - Pull requests and pushes to `main` run GitHub Actions CI for typecheck, tests, build, and `npm pack --dry-run`.
 - Published GitHub releases trigger the npm publish workflow.
