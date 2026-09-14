@@ -9,8 +9,8 @@ importers:
   .:
     devDependencies:
       '@paperclipai/plugin-sdk':
-        specifier: 2026.626.0
-        version: 2026.626.0(react@19.2.6)
+        specifier: 2026.831.1
+        version: 2026.831.1(react@19.2.6)
       '@rollup/plugin-node-resolve':
         specifier: ^16.0.1
         version: 16.0.3(rollup@4.60.4)
@@ -371,8 +371,9 @@ packages:
   '@jridgewell/sourcemap-codec@1.5.5':
     resolution: {integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==}
 
-  '@paperclipai/plugin-sdk@2026.626.0':
-    resolution: {integrity: sha512-L+iIr6dFQB+JqGbitxLwloH2s+EI87ij9ooIEvND0jW81h84DxfJHep7whSmYv7Ke74Q8mmQ5O0k829BVwIEew==}
+  '@paperclipai/plugin-sdk@2026.831.1':
+    resolution: {integrity: sha512-de69dihx3PJOHBgJfy/Z1Oe5RmyxfsIdYFDJufFFtvr+oQlj3B83OntmNb/gaPCH3sKQ+rEIHY82Qx2fbIfD9w==}
+    engines: {node: '>=24.11.0'}
     hasBin: true
     peerDependencies:
       react: '>=18'
@@ -380,8 +381,9 @@ packages:
       react:
         optional: true
 
-  '@paperclipai/shared@2026.626.0':
-    resolution: {integrity: sha512-LC4jkCXBEjsnUomWiiMU9l30JgaAvnaOV1xcw0a30u8/BkLaMqOlmzhYCFuldTlkr9O31mUpIPiLOeu7sQGjAA==}
+  '@paperclipai/shared@2026.831.1':
+    resolution: {integrity: sha512-rkpful4jL71GIl8+SRBD4oUm1Kcrz4V4RXz75kQYq8DX2xmLA0gKzcDWeenouYrAmFvzeOshDCQpc1u8FrN4xQ==}
+    engines: {node: '>=24.11.0'}
 
   '@rollup/plugin-node-resolve@16.0.3':
     resolution: {integrity: sha512-lUYM3UBGuM93CnMPG1YocWu7X802BrNF3jW2zny5gQyLQgRFJhV1Sq0Zi74+dh/6NBx1DxFC4b4GXg9wUCG5Qg==}
@@ -882,8 +884,8 @@ packages:
     engines: {node: '>=8'}
     hasBin: true
 
-  zod@3.25.76:
-    resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
+  zod@4.6.5:
+    resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
 
 snapshots:
 
@@ -1045,16 +1047,16 @@ snapshots:
 
   '@jridgewell/sourcemap-codec@1.5.5': {}
 
-  '@paperclipai/plugin-sdk@2026.626.0(react@19.2.6)':
+  '@paperclipai/plugin-sdk@2026.831.1(react@19.2.6)':
     dependencies:
-      '@paperclipai/shared': 2026.626.0
-      zod: 3.25.76
+      '@paperclipai/shared': 2026.831.1
+      zod: 4.6.5
     optionalDependencies:
       react: 19.2.6
 
-  '@paperclipai/shared@2026.626.0':
+  '@paperclipai/shared@2026.831.1':
     dependencies:
-      zod: 3.25.76
+      zod: 4.6.5
 
   '@rollup/plugin-node-resolve@16.0.3(rollup@4.60.4)':
     dependencies:
@@ -1480,4 +1482,4 @@ snapshots:
       siginfo: 2.0.0
       stackback: 0.0.2
 
-  zod@3.25.76: {}
+  zod@4.6.5: {}
