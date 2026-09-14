@@ -1823,6 +1823,9 @@ async function startMicronautMergeUp(
   // real protection while looking like it does. Until the SDK adds create-side
   // support (flagged upstream to the plugin-sdk team), the existingTrackedIssue
   // check above remains the only, imperfect guard against double-creation.
+  // tests/plugin.spec.ts has a `@ts-expect-error`-based type check that fails
+  // `pnpm typecheck` once the SDK's create() input type gains the field, which
+  // is the prompt to wire it in here for real.
   const createdIssue = await ctx.issues.create({
     companyId,
     projectId,
