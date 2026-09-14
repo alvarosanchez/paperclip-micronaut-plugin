@@ -2,7 +2,7 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/alvarosanchez/paperclip-micronaut-plugin/ci.yml?branch=main&label=ci)](https://github.com/alvarosanchez/paperclip-micronaut-plugin/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/actions/workflow/status/alvarosanchez/paperclip-micronaut-plugin/release.yml?label=release)](https://github.com/alvarosanchez/paperclip-micronaut-plugin/actions/workflows/release.yml)
-[![Node >=20](https://img.shields.io/badge/node-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Node >=24.11](https://img.shields.io/badge/node-%3E%3D24.11-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![pnpm 10](https://img.shields.io/badge/pnpm-10-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
@@ -21,7 +21,7 @@ Micronaut-focused Paperclip plugin that turns a project detail tab into a releas
 
 ## Requirements
 
-- Node.js 20 or newer
+- Node.js 24.11 or newer (the Paperclip plugin SDK baseline)
 - A Paperclip instance with plugin support, version `2026.831.1` or newer
 - A Paperclip project backed by a GitHub repository in the `micronaut-projects` organization
 - Outbound access to the GitHub API from the plugin worker
@@ -97,7 +97,7 @@ Additional verification commands:
 
 Both verification harnesses explicitly enable board approval for the disposable company, seed their test agents through Paperclip's board-governed hire flow, and approve pending hires before installing the local plugin. They also create the disposable Git-backed project with isolated issue workspaces enabled so merge-up issues exercise the current Paperclip project defaults.
 
-Set `PAPERCLIP_E2E_PAPERCLIPAI_PACKAGE=<package>` to test a different `paperclipai` package; by default both harnesses run against `paperclipai@2026.831.1` under `node@24`, matching the release's Docker baseline and avoiding Node 20's missing `node:sqlite` runtime module.
+Set `PAPERCLIP_E2E_PAPERCLIPAI_PACKAGE=<package>` to test a different `paperclipai` package; by default both harnesses run against `paperclipai@2026.831.1` under `node@24`, matching the release's Docker baseline and this package's Node 24.11+ requirement (`node:sqlite` is not available on older runtimes).
 
 ## Release
 

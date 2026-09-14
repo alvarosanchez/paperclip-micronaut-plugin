@@ -17,13 +17,6 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version:
-          - 20.19.0
-          - 22.15.0
-          - 24.14.1
     env:
       CI: true
     steps:
@@ -39,7 +32,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: 24.21.0
           cache: pnpm
 
       - name: Install dependencies

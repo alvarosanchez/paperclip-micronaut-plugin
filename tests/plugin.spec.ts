@@ -24,10 +24,87 @@ import plugin from "../src/worker.js";
 const require = createRequire(import.meta.url);
 const packageJson = require("../package.json") as {
   devDependencies?: Record<string, unknown>;
+  engines?: Record<string, unknown>;
   packageManager?: unknown;
   version?: unknown;
 };
 const itWithFakeGh = process.platform === "win32" ? it.skip : it;
+
+function compareVersions(left: string, right: string): number {
+  const parse = (value: string) => value.split(".").map((part) => Number.parseInt(part, 10));
+  const [a, b] = [parse(left), parse(right)];
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const difference = (a[index] ?? 0) - (b[index] ?? 0);
+    if (difference !== 0) {
+      return difference;
+    }
+  }
+  return 0;
+}
+
+function indentationOf(line: string): number {
+  return line.length - line.trimStart().length;
+}
+
+/**
+ * Returns the `with:` input keys of every workflow step that `uses:` the given action.
+ * Steps are YAML list items; a step ends at the next non-blank line indented at or
+ * before the step's `- ` marker.
+ */
+function workflowStepInputKeys(source: string, action: string): string[][] {
+  const lines = source.split(/\r?\n/);
+  const results: string[][] = [];
+
+  lines.forEach((line, index) => {
+    if (!new RegExp(`^\\s*(?:-\\s+)?uses:\\s*${action}(?:@|\\s|$)`).test(line)) {
+      return;
+    }
+
+    let stepIndent = indentationOf(line);
+    for (let cursor = index; cursor >= 0; cursor -= 1) {
+      const candidate = lines[cursor] ?? "";
+      if (/^\s*-\s/.test(candidate) && indentationOf(candidate) <= stepIndent) {
+        stepIndent = indentationOf(candidate);
+        break;
+      }
+    }
+
+    const keys: string[] = [];
+    let withIndent: number | null = null;
+    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+      const current = lines[cursor] ?? "";
+      if (current.trim() === "" || current.trim().startsWith("#")) {
+        continue;
+      }
+
+      const indent = indentationOf(current);
+      if (indent <= stepIndent) {
+        break;
+      }
+
+      if (withIndent === null) {
+        if (/^\s*with:\s*$/.test(current)) {
+          withIndent = indent;
+        }
+        continue;
+      }
+
+      if (indent <= withIndent) {
+        withIndent = null;
+        continue;
+      }
+
+      const match = /^\s*([A-Za-z0-9_.-]+)\s*:/.exec(current);
+      if (match?.[1]) {
+        keys.push(match[1]);
+      }
+    }
+
+    results.push(keys);
+  });
+
+  return results;
+}
 
 function createProject(repoUrl: string): Project {
   return {
@@ -558,10 +635,48 @@ describe("micronaut project detail tab", () => {
 
     for (const workflowPath of workflowPaths) {
       const source = await readFile(new URL(workflowPath, import.meta.url), "utf8");
-      expect(source).toMatch(/uses: pnpm\/action-setup@/);
-      // pnpm/action-setup reads packageManager when no version input is given, so a
-      // Renovate patch bump of packageManager must not need a matching workflow edit.
-      expect(source).not.toMatch(/^\s*version:\s*["']?\d+\.\d+\.\d+["']?\s*$/m);
+      const pnpmSetupSteps = workflowStepInputKeys(source, "pnpm/action-setup");
+
+      expect(pnpmSetupSteps.length).toBeGreaterThan(0);
+      for (const inputKeys of pnpmSetupSteps) {
+        // pnpm/action-setup reads packageManager only when no `version` input is given
+        // (whatever its shape: x.y.z, a major, or an expression), so the input must be
+        // absent for a Renovate packageManager bump to work without a workflow edit.
+        expect(inputKeys).not.toContain("version");
+      }
+    }
+  });
+
+  it("advertises the same Node.js baseline as the pinned Paperclip plugin SDK", async () => {
+    // The SDK does not export ./package.json, so read the installed copy directly.
+    const pluginSdkPackageJson = JSON.parse(
+      await readFile(new URL("../node_modules/@paperclipai/plugin-sdk/package.json", import.meta.url), "utf8")
+    ) as { engines?: Record<string, unknown> };
+    const sdkNodeRange = pluginSdkPackageJson.engines?.node;
+    const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
+    const workflowPaths = [
+      "../.github/workflows/ci.yml",
+      "../.github/workflows/release.yml"
+    ];
+
+    expect(sdkNodeRange).toBe(">=24.11.0");
+    expect(packageJson.engines?.node).toBe(sdkNodeRange);
+    const minimumNodeVersion = String(sdkNodeRange).replace(/^>=/, "");
+    expect(readme).toContain("Node.js 24.11 or newer");
+    expect(readme).not.toMatch(/Node\.js 20 or newer/);
+
+    for (const workflowPath of workflowPaths) {
+      const source = await readFile(new URL(workflowPath, import.meta.url), "utf8");
+      const nodeVersions = [...source.matchAll(/^\s*node-version:\s*["']?([^"'\n]+?)["']?\s*$/gm)].map(
+        (match) => match[1]
+      );
+
+      expect(nodeVersions.length).toBeGreaterThan(0);
+      for (const nodeVersion of nodeVersions) {
+        // Workflows must pin an exact release that satisfies the advertised engines range.
+        expect(nodeVersion).toMatch(/^\d+\.\d+\.\d+$/);
+        expect(compareVersions(nodeVersion, minimumNodeVersion)).toBeGreaterThanOrEqual(0);
+      }
     }
   });
 
