@@ -1593,6 +1593,22 @@ exit 1
     expect(issueCreateRequest?.description).toContain(
       "projectVersion=4.0.0-SNAPSHOT` becomes `projectVersion=4.1.0-SNAPSHOT`"
     );
+    // @paperclipai/plugin-sdk@2026.831.1's ctx.issues.create() does not forward
+    // an idempotencyKey to the host (see the NOTE above the create() call in
+    // src/worker.ts), unlike ctx.issues.requestWakeup below. This assertion
+    // documents today's call shape -- it observes the pre-serialization object
+    // our own code builds, so it stays true regardless of what the SDK does
+    // with it, and will *not* fail on its own once upstream support lands.
+    expect(issueCreateRequest).not.toHaveProperty("idempotencyKey");
+    // The actual regression signal for "the SDK gained create-side support" is
+    // this type check, not the runtime assertion above: it fails `pnpm
+    // typecheck` (as an "unused @ts-expect-error directive" error) once
+    // @paperclipai/plugin-sdk adds `idempotencyKey` to ctx.issues.create()'s
+    // input type, which is the prompt to wire it into src/worker.ts's
+    // create() call for real and update its NOTE and this test.
+    type CreateIssueInput = Parameters<TestHarness["ctx"]["issues"]["create"]>[0];
+    // @ts-expect-error idempotencyKey is not yet part of ctx.issues.create()'s input type -- see comment above
+    type _IdempotencyKeyNotYetOnCreateInput = CreateIssueInput["idempotencyKey"];
     expect(requestWakeupSpy).toHaveBeenCalledWith(
       result.issue.issueId,
       "company-1",

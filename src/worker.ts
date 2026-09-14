@@ -1807,6 +1807,25 @@ async function startMicronautMergeUp(
     sourceBranch,
     targetBranch
   });
+  // NOTE: the existingTrackedIssue check above is not atomic with this create
+  // call, so concurrent "Start merge up" clicks can still race and create
+  // duplicate issues (TOCTOU). Paperclip 2026.831.1 added an `idempotencyKey`
+  // field to the host's issue-create schema for exactly this purpose
+  // (createIssueDuplicateGuardSchema in packages/shared/src/validators/issue.ts,
+  // verified at tag v2026.831.1), but @paperclipai/plugin-sdk@2026.831.1's
+  // ctx.issues.create() does not plumb it through: the worker-side RPC client
+  // (packages/plugins/sdk/src/worker-rpc-host.ts) explicitly allowlists the
+  // fields it forwards to callHost("issues.create", ...) and idempotencyKey is
+  // not among them (unlike ctx.issues.requestWakeup a few dozen lines below,
+  // whose idempotencyKey *is* forwarded and tested against the wire protocol
+  // and the SDK's in-memory test harness). Passing idempotencyKey here would
+  // therefore be silently dropped before it ever reaches the host, giving no
+  // real protection while looking like it does. Until the SDK adds create-side
+  // support (flagged upstream to the plugin-sdk team), the existingTrackedIssue
+  // check above remains the only, imperfect guard against double-creation.
+  // tests/plugin.spec.ts has a `@ts-expect-error`-based type check that fails
+  // `pnpm typecheck` once the SDK's create() input type gains the field, which
+  // is the prompt to wire it in here for real.
   const createdIssue = await ctx.issues.create({
     companyId,
     projectId,
