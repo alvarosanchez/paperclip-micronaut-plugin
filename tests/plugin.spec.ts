@@ -1593,6 +1593,12 @@ exit 1
     expect(issueCreateRequest?.description).toContain(
       "projectVersion=4.0.0-SNAPSHOT` becomes `projectVersion=4.1.0-SNAPSHOT`"
     );
+    // @paperclipai/plugin-sdk@2026.831.1's ctx.issues.create() does not forward
+    // an idempotencyKey to the host (see the NOTE above the create() call in
+    // src/worker.ts), unlike ctx.issues.requestWakeup below. This assertion
+    // documents that gap so it fails loudly -- as a prompt to also update the
+    // worker.ts NOTE and this test -- once the SDK adds create-side support.
+    expect(issueCreateRequest).not.toHaveProperty("idempotencyKey");
     expect(requestWakeupSpy).toHaveBeenCalledWith(
       result.issue.issueId,
       "company-1",
