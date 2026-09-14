@@ -5,6 +5,7 @@ import { delimiter, join } from "node:path";
 import type { Agent, Project } from "@paperclipai/plugin-sdk";
 import { createTestHarness, type TestHarness } from "@paperclipai/plugin-sdk/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parse as parseYaml } from "yaml";
 import manifest, { normalizeManifestVersion } from "../src/manifest.js";
 import {
   MICRONAUT_CREATE_BRANCH_ACTION_KEY,
@@ -24,10 +25,55 @@ import plugin from "../src/worker.js";
 const require = createRequire(import.meta.url);
 const packageJson = require("../package.json") as {
   devDependencies?: Record<string, unknown>;
+  engines?: Record<string, unknown>;
   packageManager?: unknown;
   version?: unknown;
 };
 const itWithFakeGh = process.platform === "win32" ? it.skip : it;
+
+function compareVersions(left: string, right: string): number {
+  const parse = (value: string) => value.split(".").map((part) => Number.parseInt(part, 10));
+  const [a, b] = [parse(left), parse(right)];
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const difference = (a[index] ?? 0) - (b[index] ?? 0);
+    if (difference !== 0) {
+      return difference;
+    }
+  }
+  return 0;
+}
+
+type WorkflowStep = {
+  uses?: unknown;
+  with?: Record<string, unknown> | null;
+};
+
+type WorkflowJob = {
+  steps?: WorkflowStep[];
+};
+
+type Workflow = {
+  jobs?: Record<string, WorkflowJob>;
+};
+
+/**
+ * Returns the `with:` input keys of every workflow step that `uses:` the given action
+ * (matching `action` itself or `action@ref`), across all jobs. Parses the workflow as
+ * YAML (via the `yaml` package) rather than pattern-matching lines, so it recognizes
+ * `with:` regardless of key order relative to `uses:` or mapping style (block `with:`
+ * vs. inline `with: { version: ... }`).
+ */
+function workflowStepInputKeys(source: string, action: string): string[][] {
+  const workflow = (parseYaml(source) ?? {}) as Workflow;
+  const steps = Object.values(workflow.jobs ?? {}).flatMap((job) => job.steps ?? []);
+
+  return steps
+    .filter(
+      (step) =>
+        typeof step.uses === "string" && (step.uses === action || step.uses.startsWith(`${action}@`))
+    )
+    .map((step) => Object.keys(step.with ?? {}));
+}
 
 function createProject(repoUrl: string): Project {
   return {
@@ -558,10 +604,48 @@ describe("micronaut project detail tab", () => {
 
     for (const workflowPath of workflowPaths) {
       const source = await readFile(new URL(workflowPath, import.meta.url), "utf8");
-      expect(source).toMatch(/uses: pnpm\/action-setup@/);
-      // pnpm/action-setup reads packageManager when no version input is given, so a
-      // Renovate patch bump of packageManager must not need a matching workflow edit.
-      expect(source).not.toMatch(/^\s*version:\s*["']?\d+\.\d+\.\d+["']?\s*$/m);
+      const pnpmSetupSteps = workflowStepInputKeys(source, "pnpm/action-setup");
+
+      expect(pnpmSetupSteps.length).toBeGreaterThan(0);
+      for (const inputKeys of pnpmSetupSteps) {
+        // pnpm/action-setup reads packageManager only when no `version` input is given
+        // (whatever its shape: x.y.z, a major, or an expression), so the input must be
+        // absent for a Renovate packageManager bump to work without a workflow edit.
+        expect(inputKeys).not.toContain("version");
+      }
+    }
+  });
+
+  it("advertises the same Node.js baseline as the pinned Paperclip plugin SDK", async () => {
+    // The SDK does not export ./package.json, so read the installed copy directly.
+    const pluginSdkPackageJson = JSON.parse(
+      await readFile(new URL("../node_modules/@paperclipai/plugin-sdk/package.json", import.meta.url), "utf8")
+    ) as { engines?: Record<string, unknown> };
+    const sdkNodeRange = pluginSdkPackageJson.engines?.node;
+    const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
+    const workflowPaths = [
+      "../.github/workflows/ci.yml",
+      "../.github/workflows/release.yml"
+    ];
+
+    expect(sdkNodeRange).toBe(">=24.11.0");
+    expect(packageJson.engines?.node).toBe(sdkNodeRange);
+    const minimumNodeVersion = String(sdkNodeRange).replace(/^>=/, "");
+    expect(readme).toContain("Node.js 24.11 or newer");
+    expect(readme).not.toMatch(/Node\.js 20 or newer/);
+
+    for (const workflowPath of workflowPaths) {
+      const source = await readFile(new URL(workflowPath, import.meta.url), "utf8");
+      const nodeVersions = [...source.matchAll(/^\s*node-version:\s*["']?([^"'\n]+?)["']?\s*$/gm)].map(
+        (match) => match[1]
+      );
+
+      expect(nodeVersions.length).toBeGreaterThan(0);
+      for (const nodeVersion of nodeVersions) {
+        // Workflows must pin an exact release that satisfies the advertised engines range.
+        expect(nodeVersion).toMatch(/^\d+\.\d+\.\d+$/);
+        expect(compareVersions(nodeVersion, minimumNodeVersion)).toBeGreaterThanOrEqual(0);
+      }
     }
   });
 
